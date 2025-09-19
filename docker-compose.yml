@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Backend (NestJS + Telegram Bot)
+  backend:
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+    container_name: timur_bot_backend
+    env_file:
+      - ./back/.env
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "3001:3001"
+    networks:
+      - timur_bot_network
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Frontend (React Admin Panel)
+  frontend:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    container_name: timur_bot_frontend
+    env_file:
+      - ./front/.env
+    ports:
+      - "3002:3002"
+    depends_on:
+      - backend
+    networks:
+      - timur_bot_network
+    restart: unless-stopped
+
+networks:
+  timur_bot_network:
+    driver: bridge
