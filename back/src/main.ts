@@ -8,7 +8,12 @@ async function bootstrap() {
     
     // Настройка CORS для фронта
     app.enableCors({
-      origin: ['http://localhost:3000', 'http://localhost:3002'],
+      origin: [
+        'http://localhost:3000', 
+        'http://localhost:3002',
+        'http://212.86.115.171:3002',
+        'http://212.86.115.171:3000'
+      ],
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
