@@ -57,6 +57,7 @@ export interface Order {
   userId: number;
   totalPrice: number;
   status: 'pending' | 'confirmed' | 'preparing' | 'ready' | 'delivered' | 'cancelled';
+  address?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;

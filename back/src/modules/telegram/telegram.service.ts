@@ -9,7 +9,11 @@ import { CartService } from '../cart/cart.service';
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
+  private readonly MIN_ORDER_AMOUNT = 3000; // Минимальная сумма заказа в рублях
   private bot: Bot;
+  
+  // Состояние для отслеживания процесса оформления заказа
+  private orderStates = new Map<number, { step: 'address' | 'confirm', tempOrder: any }>();
 
   constructor(
     private readonly usersService: UsersService,
@@ -42,9 +46,9 @@ export class TelegramService implements OnModuleInit {
       
         if (!telegramId) {
           this.logger.error('Telegram ID не найден');
-          return;
-        }
-      
+      return;
+    }
+
         this.logger.log(`👤 Пользователь ${telegramId} написал /start`);
       
         // Проверяем, есть ли пользователь в базе
@@ -91,12 +95,12 @@ export class TelegramService implements OnModuleInit {
           
         } else if (!user.phone) {
           // Пользователь есть, но без телефона
-          await ctx.reply(
+      await ctx.reply(
             `👋 Снова привет, ${user.firstName}!\n\n` +
             `Для продолжения работы мне нужен ваш номер телефона.\n` +
             `Пожалуйста, нажмите кнопку ниже и поделитесь номером телефона.`,
-            {
-              reply_markup: {
+        {
+          reply_markup: {
                 keyboard: [
                   [{
                     text: '📱 Поделиться номером телефона',
@@ -212,21 +216,32 @@ export class TelegramService implements OnModuleInit {
           );
           return;
         }
+
+        // Проверяем, находится ли пользователь в процессе оформления заказа
+        const orderState = this.orderStates.get(user.id);
+        if (orderState && orderState.step === 'address') {
+          // Пользователь вводит адрес
+          await this.handleAddressInput(ctx, user, text);
+          return;
+        }
+
+        // Если пользователь не в процессе оформления заказа, показываем главное меню
+        await this.showMainMenu(ctx, user.toJSON());
       });
 
       // Обработка callback кнопок
-      this.bot.on('callback_query:data', async (ctx) => {
-        const data = ctx.callbackQuery.data;
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
         
         console.log(`🔘 Нажата кнопка: ${data}`);
-        
-        switch (data) {
-          case 'catalog':
-            await this.showCatalog(ctx);
-            break;
-          case 'my_orders':
-            await this.showMyOrders(ctx);
-            break;
+      
+      switch (data) {
+        case 'catalog':
+          await this.showCatalog(ctx);
+          break;
+        case 'my_orders':
+          await this.showMyOrders(ctx);
+          break;
           case 'about':
             await this.showAbout(ctx);
             break;
@@ -253,8 +268,8 @@ export class TelegramService implements OnModuleInit {
             break;
           case 'confirm_order':
             await this.confirmOrder(ctx);
-            break;
-          default:
+          break;
+        default:
             if (data.startsWith('category_')) {
               const categoryId = parseInt(data.replace('category_', ''));
               await this.showCategory(ctx, categoryId);
@@ -278,10 +293,10 @@ export class TelegramService implements OnModuleInit {
               await this.removeFromCart(ctx, cartItemId);
             } else {
               // await ctx.answerCallbackQuery();
-            }
-            break;
-        }
-        
+          }
+          break;
+      }
+      
         // await ctx.answerCallbackQuery();
       });
   
@@ -347,36 +362,36 @@ export class TelegramService implements OnModuleInit {
       throw error;
     }
   }
-    
+
   private async showCatalog(ctx: any) {
     try {
-      console.log('🔍 showCatalog вызван');
       const categories = await this.categoriesService.findAll();
-      console.log(`📂 Получено категорий в showCatalog: ${categories.length}`);
-      
-      if (categories.length === 0) {
-        console.log('⚠️ Каталог пуст!');
-        await ctx.editMessageText('📦 Каталог пуст. Товары скоро появятся!');
-        return;
-      }
-  
-      const keyboard = categories.map(category => [
+    
+    if (categories.length === 0) {
+      await ctx.editMessageText('📦 Каталог пуст. Товары скоро появятся!');
+      return;
+    }
+
+    // Сортируем категории по ID
+    const sortedCategories = categories.sort((a, b) => a.id - b.id);
+
+    const keyboard = sortedCategories.map(category => [
         { 
           text: `${category.icon} ${category.name}`, 
           callback_data: `category_${category.id}` 
         }
-      ]);
-      
+    ]);
+    
       keyboard.push([{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]);
-  
-      await ctx.editMessageText(
-        '🛍 Каталог товаров\n\nВыберите категорию:',
-        {
-          reply_markup: {
-            inline_keyboard: keyboard,
-          },
-        }
-      );
+
+    await ctx.editMessageText(
+      '🛍 Каталог товаров\n\nВыберите категорию:',
+      {
+        reply_markup: {
+          inline_keyboard: keyboard,
+        },
+      }
+    );
     } catch (error) {
       this.logger.error('Ошибка загрузки каталога:', error);
       await ctx.editMessageText('❌ Ошибка загрузки каталога');
@@ -384,17 +399,73 @@ export class TelegramService implements OnModuleInit {
   }
 
   private async showMyOrders(ctx: any) {
-    await ctx.editMessageText(
-      '📋 Ваши заказы\n\nУ вас пока нет заказов.\nНачните покупки прямо сейчас!',
-      {
+    try {
+      const user = await this.usersService.findByTelegramId(ctx.from.id);
+      if (!user) {
+        await ctx.editMessageText('❌ Пользователь не найден');
+        return;
+      }
+
+      const orders = await this.ordersService.getUserOrders(user.id);
+
+      if (orders.length === 0) {
+        await ctx.editMessageText(
+          '📋 Ваши заказы\n\nУ вас пока нет заказов.\nНачните покупки прямо сейчас!',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🛒 Перейти в каталог', callback_data: 'catalog' }],
+                [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+
+      let message = '📋 Ваши заказы\n\n';
+      
+      orders.forEach((order, index) => {
+        message += `📦 Заказ #${order.id}\n`;
+        message += `💰 Сумма: ${order.totalPrice} ₽\n`;
+        message += `📍 Адрес: ${order.address || 'Не указан'}\n`;
+        message += `📊 Статус: ${this.getOrderStatusText(order.status)}\n`;
+        message += `📅 Дата: ${new Date(order.createdAt).toLocaleDateString('ru-RU')}\n`;
+        
+        if (order.orderItems && order.orderItems.length > 0) {
+          message += '🛍 Товары:\n';
+          order.orderItems.forEach((item, itemIndex) => {
+            message += `  ${itemIndex + 1}. ${item.product?.name || 'Неизвестный товар'} × ${item.quantity}\n`;
+          });
+        }
+        
+        message += '\n';
+      });
+
+      await ctx.editMessageText(message, {
         reply_markup: {
           inline_keyboard: [
             [{ text: '🛒 Перейти в каталог', callback_data: 'catalog' }],
             [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]
           ]
         }
-      }
-    );
+      });
+    } catch (error) {
+      this.logger.error('Ошибка загрузки заказов:', error);
+      await ctx.editMessageText('❌ Ошибка загрузки заказов');
+    }
+  }
+
+  private getOrderStatusText(status: string): string {
+    switch (status) {
+      case 'pending': return '⏳ Ожидает подтверждения';
+      case 'confirmed': return '✅ Подтвержден';
+      case 'preparing': return '👨‍🍳 Готовится';
+      case 'ready': return '📦 Готов к выдаче';
+      case 'delivered': return '🚚 Доставлен';
+      case 'cancelled': return '❌ Отменен';
+      default: return status;
+    }
   }
 
   private async showAbout(ctx: any) {
@@ -448,25 +519,27 @@ export class TelegramService implements OnModuleInit {
       // Создаем клавиатуру с подкатегориями и товарами
       const keyboard = [];
       
-      // Добавляем подкатегории
+      // Добавляем подкатегории (сортируем по ID)
       if (subcategories.length > 0) {
         message += 'Подкатегории:\n';
-        subcategories.forEach(sub => {
+        const sortedSubcategories = subcategories.sort((a, b) => a.id - b.id);
+        sortedSubcategories.forEach(sub => {
           keyboard.push([{ text: `📁 ${sub.name}`, callback_data: `subcategory_${sub.id}` }]);
         });
       }
       
-      // Добавляем товары из самой категории (без подкатегории)
+      // Добавляем товары из самой категории (без подкатегории, сортируем по имени)
       if (products.length > 0) {
         if (subcategories.length > 0) {
           message += '\nТовары в категории:\n';
         }
-        // Группируем товары по 2 в ряд
-        for (let i = 0; i < products.length; i += 2) {
+        // Сортируем товары по имени и группируем по 2 в ряд
+        const sortedProducts = products.sort((a, b) => a.name.localeCompare(b.name));
+        for (let i = 0; i < sortedProducts.length; i += 2) {
           const row = [];
-          row.push({ text: `🛒 ${products[i].name}`, callback_data: `product_${products[i].id}` });
-          if (products[i + 1]) {
-            row.push({ text: `🛒 ${products[i + 1].name}`, callback_data: `product_${products[i + 1].id}` });
+          row.push({ text: `🛒 ${sortedProducts[i].name}`, callback_data: `product_${sortedProducts[i].id}` });
+          if (sortedProducts[i + 1]) {
+            row.push({ text: `🛒 ${sortedProducts[i + 1].name}`, callback_data: `product_${sortedProducts[i + 1].id}` });
           }
           keyboard.push(row);
         }
@@ -496,26 +569,26 @@ export class TelegramService implements OnModuleInit {
       const subcategory = await this.categoriesService.findSubcategoryById(subcategoryId);
       if (!subcategory) {
         await ctx.editMessageText('❌ Подкатегория не найдена');
-        return;
-      }
-  
+      return;
+    }
+
       const products = await this.productsService.findBySubcategory(subcategoryId);
-      
+    
       if (products.length === 0) {
-        await ctx.editMessageText(
+      await ctx.editMessageText(
           `📁 ${subcategory.name}\n\nВ этой подкатегории пока нет товаров.`,
-          {
-            reply_markup: {
-              inline_keyboard: [
+        {
+          reply_markup: {
+            inline_keyboard: [
                 [{ text: '🔙 Назад к категории', callback_data: `category_${subcategory.categoryId}` }],
                 [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
-              ],
-            },
-          }
-        );
-        return;
-      }
-  
+            ],
+          },
+        }
+      );
+      return;
+    }
+
       await this.showProducts(ctx, products, subcategory.name);
     } catch (error) {
       this.logger.error('Ошибка загрузки подкатегории:', error);
@@ -524,12 +597,15 @@ export class TelegramService implements OnModuleInit {
   }
   
   private async showProducts(ctx: any, products: any[], categoryName: string) {
+    // Сортируем товары по имени
+    const sortedProducts = products.sort((a, b) => a.name.localeCompare(b.name));
+    
     const productsPerPage = 5;
     const currentPage = 0; // Пока без пагинации
     
     const startIndex = currentPage * productsPerPage;
     const endIndex = startIndex + productsPerPage;
-    const currentProducts = products.slice(startIndex, endIndex);
+    const currentProducts = sortedProducts.slice(startIndex, endIndex);
   
     let message = `🛒 ${categoryName}\n\n`;
     
@@ -550,7 +626,7 @@ export class TelegramService implements OnModuleInit {
     ]);
   
     keyboard.push([{ text: '🔙 Назад в каталог', callback_data: 'catalog' }]);
-  
+
     await ctx.editMessageText(message, {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -558,7 +634,7 @@ export class TelegramService implements OnModuleInit {
       },
     });
   }
-  
+
   private async showProduct(ctx: any, productId: number) {
     try {
       const product = await this.productsService.findById(productId);
@@ -633,17 +709,17 @@ export class TelegramService implements OnModuleInit {
       const cartItems = await this.cartService.getCartItems(user.id);
       
       if (cartItems.length === 0) {
-        await ctx.editMessageText(
+    await ctx.editMessageText(
           '🛒 Ваша корзина пуста\n\nДобавьте товары из каталога!',
-          {
-            reply_markup: {
-              inline_keyboard: [
+      {
+        reply_markup: {
+          inline_keyboard: [
                 [{ text: '🛒 Перейти в каталог', callback_data: 'catalog' }],
                 [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
-              ],
-            },
-          }
-        );
+          ],
+        },
+      }
+    );
         return;
       }
   
@@ -659,7 +735,12 @@ export class TelegramService implements OnModuleInit {
       });
   
       message += `💳 Итого: ${total} ₽`;
-  
+      
+      // Проверяем минимальную сумму заказа
+      if (total < this.MIN_ORDER_AMOUNT) {
+        message += `\n\n⚠️ Заказ доступен от ${this.MIN_ORDER_AMOUNT} ₽`;
+      }
+
       const keyboard = []
       for (let item of cartItems) {
         keyboard.push([
@@ -669,11 +750,19 @@ export class TelegramService implements OnModuleInit {
         ])
         keyboard.push([{ text: `🗑 ${item.product.name}`, callback_data: `cart_remove_${item.id}` }])
       }
-  
-      keyboard.push([
-        { text: '✅ Оформить заказ', callback_data: 'checkout' },
-        { text: '🗑 Очистить корзину', callback_data: 'cart_clear' }
-      ]);
+
+      // Показываем кнопку "Оформить заказ" только если сумма >= MIN_ORDER_AMOUNT
+      if (total >= this.MIN_ORDER_AMOUNT) {
+        keyboard.push([
+          { text: '✅ Оформить заказ', callback_data: 'checkout' },
+          { text: '🗑 Очистить корзину', callback_data: 'cart_clear' }
+        ]);
+      } else {
+        keyboard.push([
+          { text: '🗑 Очистить корзину', callback_data: 'cart_clear' }
+        ]);
+      }
+      
       keyboard.push([
         { text: '🛒 Продолжить покупки', callback_data: 'catalog' },
         { text: '🏠 Главное меню', callback_data: 'back_to_menu' }
@@ -687,6 +776,58 @@ export class TelegramService implements OnModuleInit {
     } catch (error) {
       this.logger.error('Ошибка загрузки корзины:', error);
       await ctx.editMessageText('❌ Ошибка загрузки корзины');
+    }
+  }
+
+  private async handleAddressInput(ctx: any, user: any, address: string) {
+    try {
+      const orderState = this.orderStates.get(user.id);
+      if (!orderState || orderState.step !== 'address') {
+        await ctx.reply('❌ Произошла ошибка. Попробуйте оформить заказ заново.');
+        return;
+      }
+
+      // Обновляем состояние на подтверждение
+      orderState.tempOrder.address = address;
+      orderState.step = 'confirm';
+      this.orderStates.set(user.id, orderState);
+
+      // Показываем подтверждение заказа
+      await this.showOrderConfirmation(ctx, user, orderState.tempOrder);
+    } catch (error) {
+      this.logger.error('Ошибка обработки адреса:', error);
+      await ctx.reply('❌ Произошла ошибка. Попробуйте еще раз.');
+    }
+  }
+
+  private async showOrderConfirmation(ctx: any, user: any, tempOrder: any) {
+    try {
+      let message = '✅ Подтверждение заказа\n\n';
+      message += `📞 Телефон: ${this.formatPhone(user.phone)}\n`;
+      message += `📍 Адрес: ${tempOrder.address}\n\n`;
+      message += '🛍 Ваш заказ:\n\n';
+
+      tempOrder.cartItems.forEach((item, index) => {
+        const itemTotal = item.product.price * item.quantity;
+        message += `${index + 1}. ${item.product.name}\n`;
+        message += `   💰 ${item.product.price} ₽ × ${item.quantity} = ${itemTotal} ₽\n\n`;
+      });
+
+      message += `💳 Итого: ${tempOrder.total} ₽\n\n`;
+      message += 'Подтвердите заказ или вернитесь для изменений.';
+
+      await ctx.reply(message, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Подтвердить заказ', callback_data: 'confirm_order' }],
+            [{ text: '🔙 Изменить адрес', callback_data: 'checkout' }],
+            [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
+          ],
+        },
+      });
+    } catch (error) {
+      this.logger.error('Ошибка показа подтверждения заказа:', error);
+      await ctx.reply('❌ Ошибка показа подтверждения заказа');
     }
   }
 
@@ -777,24 +918,47 @@ export class TelegramService implements OnModuleInit {
         await ctx.editMessageText('❌ Корзина пуста');
         return;
       }
+
+      // Проверяем минимальную сумму заказа
+      if (total < this.MIN_ORDER_AMOUNT) {
+        await ctx.editMessageText(
+          `❌ Заказ доступен от ${this.MIN_ORDER_AMOUNT} ₽\n\nВаша сумма: ${total} ₽`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🛒 Перейти в каталог', callback_data: 'catalog' }],
+                [{ text: '🛍 Моя корзина', callback_data: 'cart' }]
+              ]
+            }
+          }
+        );
+        return;
+      }
   
-      let message = '✅ Подтверждение заказа\n\n';
+      // Сохраняем данные заказа во временное состояние
+      const tempOrder = {
+        cartItems,
+        total,
+        user
+      };
+      this.orderStates.set(user.id, { step: 'address', tempOrder });
+
+      let message = '🏠 Введите адрес доставки\n\n';
       message += `📞 Телефон: ${this.formatPhone(user.phone)}\n\n`;
       message += '🛍 Ваш заказ:\n\n';
-  
+
       cartItems.forEach((item, index) => {
         const itemTotal = item.product.price * item.quantity;
         message += `${index + 1}. ${item.product.name}\n`;
         message += `   💰 ${item.product.price} ₽ × ${item.quantity} = ${itemTotal} ₽\n\n`;
       });
-  
+
       message += `💳 Итого: ${total} ₽\n\n`;
-      message += 'Подтвердите заказ или вернитесь в корзину для изменений.';
-  
+      message += '📍 Пожалуйста, введите адрес доставки в следующем сообщении:';
+
       await ctx.editMessageText(message, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '✅ Подтвердить заказ', callback_data: 'confirm_order' }],
             [{ text: '🔙 Вернуться в корзину', callback_data: 'cart' }],
             [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
           ],
@@ -813,18 +977,25 @@ export class TelegramService implements OnModuleInit {
         await ctx.editMessageText('❌ Пользователь не найден');
         return;
       }
-  
-      const cartItems = await this.cartService.getCartItems(user.id);
-      const total = await this.cartService.getCartTotal(user.id);
-  
+
+      // Получаем данные заказа из временного состояния
+      const orderState = this.orderStates.get(user.id);
+      if (!orderState || orderState.step !== 'confirm') {
+        await ctx.editMessageText('❌ Произошла ошибка. Попробуйте оформить заказ заново.');
+        return;
+      }
+
+      const { cartItems, total, address } = orderState.tempOrder;
+
       if (cartItems.length === 0) {
         await ctx.editMessageText('❌ Корзина пуста');
         return;
       }
-  
-      // Создаем заказ
+
+      // Создаем заказ с адресом
       const order = await this.ordersService.createOrder(user.id, {
         status: 'pending',
+        address: address,
         notes: `Заказ через Telegram бота`,
       });
 
@@ -845,25 +1016,27 @@ export class TelegramService implements OnModuleInit {
       // Обновляем общую сумму заказа
       await this.ordersService.updateOrderTotal(order.id, orderTotal);
   
-      // Очищаем корзину
+      // Очищаем корзину и временное состояние
       await this.cartService.clearCart(user.id);
+      this.orderStates.delete(user.id);
   
       let message = '🎉 Заказ успешно оформлен!\n\n';
       message += `📋 Номер заказа: #${order.id}\n`;
       message += `💰 Сумма: ${orderTotal} ₽\n`;
-      message += `📞 Телефон: ${this.formatPhone(user.phone)}\n\n`;
+      message += `📞 Телефон: ${this.formatPhone(user.phone)}\n`;
+      message += `📍 Адрес: ${address}\n\n`;
       message += '⏳ Статус: Ожидает подтверждения\n\n';
       message += 'Мы свяжемся с вами для подтверждения заказа.';
-  
-      await ctx.editMessageText(message, {
-        reply_markup: {
-          inline_keyboard: [
+
+    await ctx.editMessageText(message, {
+      reply_markup: {
+        inline_keyboard: [
             [{ text: '📋 Мои заказы', callback_data: 'my_orders' }],
             [{ text: '🛒 Продолжить покупки', callback_data: 'catalog' }],
             [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
-          ],
-        },
-      });
+        ],
+      },
+    });
   
       // Уведомляем администраторов о новом заказе
       await this.notifyAdminsAboutNewOrder(order, user, orderTotal);

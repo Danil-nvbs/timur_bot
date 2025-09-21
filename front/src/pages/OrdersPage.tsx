@@ -28,6 +28,7 @@ import {
   Schedule,
   LocalShipping,
   Cancel,
+  LocationOn,
 } from '@mui/icons-material';
 import { Order } from '../types';
 import { apiService } from '../services/api';
@@ -158,6 +159,7 @@ const OrdersPage: React.FC = () => {
                 <TableCell>Пользователь</TableCell>
                 <TableCell>Товары</TableCell>
                 <TableCell>Сумма</TableCell>
+                <TableCell>Адрес</TableCell>
                 <TableCell>Статус</TableCell>
                 <TableCell>Дата</TableCell>
                 <TableCell>Действия</TableCell>
@@ -215,6 +217,20 @@ const OrdersPage: React.FC = () => {
                     <Typography variant="body2" fontWeight="bold" color="primary">
                       {order.totalPrice} ₽
                     </Typography>
+                  </TableCell>
+                  <TableCell>
+                    {order.address ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <LocationOn sx={{ fontSize: 16, color: 'text.secondary' }} />
+                        <Typography variant="body2" sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {order.address}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        Не указан
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Chip

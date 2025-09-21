@@ -36,6 +36,12 @@ export class Order extends Model {
     type: DataType.TEXT,
     allowNull: true,
   })
+  address: string;
+
+  @Column({
+    type: DataType.TEXT,
+    allowNull: true,
+  })
   notes: string;
 
   @BelongsTo(() => User)
