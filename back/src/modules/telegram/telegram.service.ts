@@ -313,7 +313,6 @@ export class TelegramService implements OnModuleInit {
   }
   
   private async showMainMenu(ctx: any, user: any) {
-    console.log(user)
     if (!user || !user.id) {
       this.logger.error('❌ showMainMenu: пользователь или его ID отсутствует');
       await ctx.reply('❌ Произошла ошибка. Попробуйте написать /start еще раз.');
