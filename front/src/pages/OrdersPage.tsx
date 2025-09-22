@@ -11,6 +11,8 @@ import {
   TableHead,
   TableRow,
   Chip,
+  Tabs,
+  Tab,
   IconButton,
   CircularProgress,
   Alert,
@@ -37,6 +39,7 @@ const OrdersPage: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeStatus, setActiveStatus] = useState<'all' | 'pending' | 'confirmed' | 'preparing' | 'ready' | 'delivered' | 'cancelled'>('all');
   
   // Меню действий
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -122,6 +125,23 @@ const OrdersPage: React.FC = () => {
     }
   };
 
+  const statuses: { key: 'all' | 'pending' | 'confirmed' | 'preparing' | 'ready' | 'delivered' | 'cancelled'; label: string }[] = [
+    { key: 'all', label: 'Все' },
+    { key: 'pending', label: 'Ожидает' },
+    { key: 'confirmed', label: 'Подтвержден' },
+    { key: 'preparing', label: 'Готовится' },
+    { key: 'ready', label: 'Готов к выдаче' },
+    { key: 'delivered', label: 'Доставлен' },
+    { key: 'cancelled', label: 'Отменен' },
+  ];
+
+  const filteredOrders = activeStatus === 'all' ? orders : orders.filter((o) => o.status === activeStatus);
+
+  const countByStatus = orders.reduce<Record<string, number>>((acc, o) => {
+    acc[o.status] = (acc[o.status] || 0) + 1;
+    return acc;
+  }, {});
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
@@ -141,8 +161,24 @@ const OrdersPage: React.FC = () => {
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom>
-        Заказы ({orders.length})
+        Заказы ({filteredOrders.length})
       </Typography>
+      <Box sx={{ mb: 2 }}>
+        <Tabs
+          value={activeStatus}
+          onChange={(_e, v) => setActiveStatus(v)}
+          variant="scrollable"
+          scrollButtons="auto"
+        >
+          {statuses.map((s) => (
+            <Tab
+              key={s.key}
+              value={s.key}
+              label={`${s.label}${s.key === 'all' ? ` (${orders.length})` : countByStatus[s.key] ? ` (${countByStatus[s.key]})` : ''}`}
+            />)
+          )}
+        </Tabs>
+      </Box>
       
       {orders.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
@@ -166,7 +202,7 @@ const OrdersPage: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {orders.map((order) => (
+              {filteredOrders.map((order) => (
                 <TableRow key={order.id} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight="bold">
