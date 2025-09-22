@@ -27,7 +27,7 @@ export class ApiController {
       this.ordersService.getAllOrders(),
     ]);
 
-    const totalRevenue = orders.reduce((sum, order) => sum + order.totalPrice, 0);
+    const totalRevenue = orders.reduce((sum, order) => sum + Number(order.totalPrice || 0), 0);
 
     return {
       totalUsers: users.length,
