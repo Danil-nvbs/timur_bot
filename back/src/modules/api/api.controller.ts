@@ -27,13 +27,60 @@ export class ApiController {
       this.ordersService.getAllOrders(),
     ]);
 
-    const totalRevenue = orders.reduce((sum, order) => sum + Number(order.totalPrice || 0), 0);
+    // Выручка: разделяем по статусам
+    const revenueCompleted = orders
+      .filter((o) => o.status === 'delivered')
+      .reduce((sum, o) => sum + Number(o.totalPrice || 0), 0);
+
+    const revenueInProgress = orders
+      .filter((o) => ['pending', 'confirmed', 'preparing', 'ready'].includes(o.status as any))
+      .reduce((sum, o) => sum + Number(o.totalPrice || 0), 0);
+
+    // Общая выручка без отменённых
+    const totalRevenue = revenueCompleted + revenueInProgress;
+
+    // Сводка заказов по статусам
+    const ordersByStatus = orders.reduce(
+      (acc: Record<string, number>, o) => {
+        acc[o.status] = (acc[o.status] || 0) + 1;
+        return acc;
+      },
+      { pending: 0, confirmed: 0, preparing: 0, ready: 0, delivered: 0, cancelled: 0 } as Record<string, number>
+    );
+
+    // Разбивка выручки (только выполненные) по периодам
+    const now = Date.now();
+    const ms = {
+      h24: 24 * 60 * 60 * 1000,
+      d3: 3 * 24 * 60 * 60 * 1000,
+      d7: 7 * 24 * 60 * 60 * 1000,
+      d30: 30 * 24 * 60 * 60 * 1000,
+    };
+
+    const deliveredOrders = orders.filter((o) => o.status === 'delivered');
+
+    const sumPeriod = (fromMs: number) =>
+      deliveredOrders
+        .filter((o) => new Date(o.createdAt as any).getTime() >= now - fromMs)
+        .reduce((sum, o) => sum + Number(o.totalPrice || 0), 0);
+
+    const revenueCompletedBreakdown = {
+      last24h: sumPeriod(ms.h24),
+      last3d: sumPeriod(ms.d3),
+      last7d: sumPeriod(ms.d7),
+      last30d: sumPeriod(ms.d30),
+      all: deliveredOrders.reduce((sum, o) => sum + Number(o.totalPrice || 0), 0),
+    };
 
     return {
       totalUsers: users.length,
       totalProducts: products.length,
       totalOrders: orders.length,
       totalRevenue,
+      revenueCompleted,
+      revenueInProgress,
+      ordersByStatus,
+      revenueCompletedBreakdown,
     };
   }
 
