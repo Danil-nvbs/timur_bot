@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Bot } from 'grammy';
+import { Bot, InputFile } from 'grammy';
 import { UsersService } from '../users/users.service';
 import { ProductsService } from '../products/products.service';
 import { OrdersService } from '../orders/orders.service';
@@ -336,16 +336,11 @@ export class TelegramService implements OnModuleInit {
         ]
       }
     }
+    
     if (ctx.callbackQuery) {
-      await ctx.editMessageText(
-        message,
-        options
-      );
+      await this.safeEditMessage(ctx, message, options);
     } else {
-      await ctx.reply(
-        message,
-        options
-      );
+      await ctx.reply(message, options);
     }
   }
   
@@ -383,7 +378,7 @@ export class TelegramService implements OnModuleInit {
     
       keyboard.push([{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]);
 
-    await ctx.editMessageText(
+    await this.safeEditMessage(ctx,
       '🛍 Каталог товаров\n\nВыберите категорию:',
       {
         reply_markup: {
@@ -393,7 +388,7 @@ export class TelegramService implements OnModuleInit {
     );
     } catch (error) {
       this.logger.error('Ошибка загрузки каталога:', error);
-      await ctx.editMessageText('❌ Ошибка загрузки каталога');
+      await this.safeEditMessage(ctx, '❌ Ошибка загрузки каталога');
     }
   }
 
@@ -441,7 +436,7 @@ export class TelegramService implements OnModuleInit {
         message += '\n';
       });
 
-      await ctx.editMessageText(message, {
+      await this.safeEditMessage(ctx, message, {
         reply_markup: {
           inline_keyboard: [
             [{ text: '🛒 Перейти в каталог', callback_data: 'catalog' }],
@@ -451,7 +446,7 @@ export class TelegramService implements OnModuleInit {
       });
     } catch (error) {
       this.logger.error('Ошибка загрузки заказов:', error);
-      await ctx.editMessageText('❌ Ошибка загрузки заказов');
+      await this.safeEditMessage(ctx, '❌ Ошибка загрузки заказов');
     }
   }
 
@@ -468,7 +463,7 @@ export class TelegramService implements OnModuleInit {
   }
 
   private async showAbout(ctx: any) {
-    await ctx.editMessageText(
+    await this.safeEditMessage(ctx,
       'ℹ️ О нас\n\n' +
       'Добро пожаловать в наш магазин продуктов!\n\n' +
       'Мы предлагаем свежие и качественные продукты по доступным ценам.',
@@ -483,7 +478,7 @@ export class TelegramService implements OnModuleInit {
   }
 
   private async showSupport(ctx: any) {
-    await ctx.editMessageText(
+    await this.safeEditMessage(ctx,
       '🆘 Поддержка\n\n' +
       'Если у вас есть вопросы или проблемы:\n\n' +
       '📱 Телефон: +7 (XXX) XXX-XX-XX\n' +
@@ -552,14 +547,14 @@ export class TelegramService implements OnModuleInit {
       // Добавляем кнопку "Назад"
       keyboard.push([{ text: '🔙 Назад в каталог', callback_data: 'catalog' }]);
       
-      await ctx.editMessageText(message, {
+      await this.safeEditMessage(ctx, message, {
         reply_markup: {
           inline_keyboard: keyboard,
         },
       });
     } catch (error) {
       this.logger.error('Ошибка загрузки категории:', error);
-      await ctx.editMessageText('❌ Ошибка загрузки категории');
+      await this.safeEditMessage(ctx, '❌ Ошибка загрузки категории');
     }
   }
 
@@ -641,25 +636,89 @@ export class TelegramService implements OnModuleInit {
         await ctx.editMessageText('❌ Товар не найден');
         return;
       }
-  
-      let message = `🛍 ${product.name}\n\n`;
-      message += `💰 Цена: ${product.price} ₽\n\n`;
-      if (product.description) {
-        message += `📝 Описание:\n${product.description}\n\n`;
+      
+      // Получаем количество товара в корзине пользователя
+      const user = await this.usersService.findByTelegramId(ctx.from.id);
+      let cartQuantity = 0;
+      if (user) {
+        const cartItems = await this.cartService.getCartItems(user.id);
+        const cartItem = cartItems.find(item => item.productId === productId);
+        cartQuantity = cartItem ? cartItem.quantity : 0;
       }
-      message += `📦 Доступен: ${product.isAvailable ? '✅ Да' : '❌ Нет'}`;
-  
+      
+      const messageTextLines: string[] = [];
+      messageTextLines.push(`🛍 ${product.name}`);
+      messageTextLines.push('');
+      messageTextLines.push(`💰 Цена: ${product.price} ₽`);
+      if (product.minQuantity && product.minQuantity > 1) {
+        messageTextLines.push(`📦 Мин. заказ: ${product.minQuantity}`);
+      }
+      if (cartQuantity > 0) {
+        messageTextLines.push(`🛒 В корзине: ${cartQuantity} шт.`);
+      }
+      if (product.description) {
+        messageTextLines.push('');
+        messageTextLines.push('📝 Описание:');
+        messageTextLines.push(product.description);
+      }
+      messageTextLines.push('');
+      messageTextLines.push(`📦 Доступен: ${product.isAvailable ? '✅ Да' : '❌ Нет'}`);
+
       const keyboard = [
         [{ text: '🛒 Добавить в корзину', callback_data: `add_to_cart_${product.id}` }],
+        [{ text: '🛍 Перейти в корзину', callback_data: 'cart' }],
         [{ text: '🔙 Назад к товарам', callback_data: `category_${product.categoryId}` }],
         [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
       ];
-  
-      await ctx.editMessageText(message, {
-        reply_markup: {
-          inline_keyboard: keyboard,
-        },
-      });
+
+      const caption = messageTextLines.join('\n');
+
+      // Если есть изображение (base64), отправляем как фото с подписью, иначе текст
+      if (product.image) {
+        try {
+          // Поддержка как "сырых" base64, так и data URL. Преобразуем в Buffer
+          const dataUrlMatch = product.image.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/);
+          let mime = 'image/jpeg';
+          let base64Payload = product.image;
+          if (dataUrlMatch) {
+            mime = dataUrlMatch[1] || 'image/jpeg';
+            base64Payload = dataUrlMatch[2];
+          } else if (product.image.startsWith('data:')) {
+            // Неподдерживаемый формат data-url, fallback на текст
+            throw new Error('Unsupported image data URL');
+          }
+
+          const buffer = Buffer.from(base64Payload, 'base64');
+          const filename = `product.${mime.split('/')[1] || 'jpg'}`;
+
+          // Если пришли сюда из callback, сначала обновим сообщение на "Загружаем фото..." чтобы избежать ошибки edit при sendPhoto
+          if (ctx.callbackQuery) {
+            await ctx.editMessageText('📷 Загружаем фото товара...');
+          }
+
+          await this.bot.api.sendPhoto(
+            ctx.chat.id,
+            new InputFile(buffer, filename),
+            {
+              caption,
+              reply_markup: { inline_keyboard: keyboard },
+            }
+          );
+        } catch (e) {
+          this.logger.warn('Не удалось отправить фото, показываю текст: ' + (e as any)?.message);
+          if (ctx.callbackQuery) {
+            await ctx.editMessageText(caption, { reply_markup: { inline_keyboard: keyboard } });
+          } else {
+            await ctx.reply(caption, { reply_markup: { inline_keyboard: keyboard } });
+          }
+        }
+      } else {
+        if (ctx.callbackQuery) {
+          await ctx.editMessageText(caption, { reply_markup: { inline_keyboard: keyboard } });
+        } else {
+          await ctx.reply(caption, { reply_markup: { inline_keyboard: keyboard } });
+        }
+      }
     } catch (error) {
       this.logger.error('Ошибка загрузки товара:', error);
       await ctx.editMessageText('❌ Ошибка загрузки товара');
@@ -685,9 +744,30 @@ export class TelegramService implements OnModuleInit {
         return;
       }
   
-      await this.cartService.addToCart(user.id, productId, 1);
+      // Проверяем, есть ли уже этот товар в корзине
+      const existingCartItems = await this.cartService.getCartItems(user.id);
+      const existingItem = existingCartItems.find(item => item.productId === productId);
+      
+      const minQuantity = product.minQuantity || 1;
+      let quantityToAdd = 1; // По умолчанию добавляем 1
+      let message = '';
+      
+      if (existingItem) {
+        // Товар уже в корзине - добавляем 1 штуку
+        quantityToAdd = 1;
+        message = `✅ ${product.name} (+1 шт.)`;
+      } else {
+        // Товара нет в корзине - добавляем минимальное количество
+        quantityToAdd = minQuantity;
+        message = minQuantity > 1 
+          ? `✅ ${product.name} добавлен в корзину (мин. ${minQuantity})!`
+          : `✅ ${product.name} добавлен в корзину!`;
+      }
+      
+      await this.cartService.addToCart(user.id, productId, quantityToAdd);
+        
       await ctx.answerCallbackQuery({ 
-        text: `✅ ${product.name} добавлен в корзину!`, 
+        text: message, 
         show_alert: false 
       });
       
@@ -847,10 +927,25 @@ export class TelegramService implements OnModuleInit {
       }
   
       const newQuantity = item.quantity + change;
+      const minQuantity = item.product.minQuantity || 1;
       
       if (newQuantity <= 0) {
         await this.cartService.removeFromCart(cartItemId, user.id);
         await ctx.answerCallbackQuery({ text: '✅ Товар удален из корзины', show_alert: false });
+      } else if (newQuantity < minQuantity) {
+        // Если пытаемся уменьшить ниже минимума
+        if (change < 0) {
+          await ctx.answerCallbackQuery({ 
+            text: `❌ Это минимальный заказ (${minQuantity}), можно только удалить товар`, 
+            show_alert: true 
+          });
+        } else {
+          await ctx.answerCallbackQuery({ 
+            text: `❌ Минимальное количество для ${item.product.name}: ${minQuantity}`, 
+            show_alert: true 
+          });
+        }
+        return;
       } else {
         await this.cartService.updateCartItemQuantity(cartItemId, user.id, newQuantity);
         await ctx.answerCallbackQuery({ text: '✅ Количество обновлено', show_alert: false });
@@ -1076,5 +1171,27 @@ export class TelegramService implements OnModuleInit {
     }
     
     return phone;
+  }
+
+  private async safeEditMessage(ctx: any, text: string, options?: any) {
+    try {
+      await ctx.editMessageText(text, options);
+    } catch (error) {
+      // Если сообщение не изменилось (дублированное нажатие), просто игнорируем
+      if (error.message && error.message.includes('message is not modified')) {
+        this.logger.debug('Сообщение уже в нужном состоянии, игнорируем');
+        return;
+      }
+      
+      // Если не удалось отредактировать (например, последнее сообщение было фото),
+      // удаляем старое сообщение и отправляем новое
+      this.logger.warn('Не удалось отредактировать сообщение, удаляем старое и отправляем новое:', error.message);
+      try {
+        await ctx.deleteMessage();
+      } catch (deleteError) {
+        this.logger.warn('Не удалось удалить старое сообщение:', deleteError.message);
+      }
+      await ctx.reply(text, options);
+    }
   }
 }

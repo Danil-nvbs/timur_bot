@@ -1,10 +1,15 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
+import { json, urlencoded } from 'body-parser';
 
 async function bootstrap() {
   try {
     const app = await NestFactory.create(AppModule);
+
+    // Увеличиваем лимиты тела запроса для загрузки изображений в base64
+    app.use(json({ limit: '5mb' }));
+    app.use(urlencoded({ limit: '5mb', extended: true }));
     
     // Настройка CORS для фронта
     app.enableCors({

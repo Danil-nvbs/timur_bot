@@ -15,6 +15,7 @@ export class ProductsService {
     console.log('🔍 ProductsService.findAll() вызван');
     const products = await this.productModel.findAll({
       where: { isAvailable: true, deleted: false },
+      attributes: { exclude: ['image'] }, // Исключаем изображения для списков
       include: [
         { model: Category, attributes: ['id', 'name'], required: false },
         { model: Subcategory, attributes: ['id', 'name'], required: false }
@@ -33,6 +34,7 @@ export class ProductsService {
         isAvailable: true, 
         deleted: false 
       },
+      attributes: { exclude: ['image'] }, // Исключаем изображения для списков
       include: [
         { model: Category, attributes: ['id', 'name'], required: false },
         { model: Subcategory, attributes: ['id', 'name'], required: false }
@@ -73,6 +75,7 @@ export class ProductsService {
   async findBySubcategory(subcategoryId: number): Promise<Product[]> {
     return this.productModel.findAll({
       where: { subcategoryId, isAvailable: true, deleted: false },
+      attributes: { exclude: ['image'] }, // Исключаем изображения для списков
       include: [
         { model: Category, attributes: ['id', 'name'], required: false },
         { model: Subcategory, attributes: ['id', 'name'], required: false }
@@ -82,6 +85,56 @@ export class ProductsService {
   }
 
   async searchProducts(filters: {
+    search?: string;
+    categoryId?: number;
+    subcategoryId?: number;
+    isAvailable?: boolean;
+  }): Promise<Product[]> {
+    const where: any = { deleted: false };
+
+    if (filters.search) {
+      where.name = {
+        [require('sequelize').Op.iLike]: `%${filters.search}%`
+      };
+    }
+
+    if (filters.categoryId) {
+      where.categoryId = filters.categoryId;
+    }
+
+    if (filters.subcategoryId) {
+      where.subcategoryId = filters.subcategoryId;
+    }
+
+    if (filters.isAvailable !== undefined) {
+      where.isAvailable = filters.isAvailable;
+    }
+
+    return this.productModel.findAll({
+      where,
+      attributes: { exclude: ['image'] }, // Исключаем изображения для списков
+      include: [
+        { model: Category, attributes: ['id', 'name'], required: false },
+        { model: Subcategory, attributes: ['id', 'name'], required: false }
+      ],
+      order: [['name', 'ASC']],
+    });
+  }
+
+  // Метод для админки - включает изображения
+  async findAllForAdmin(): Promise<Product[]> {
+    return this.productModel.findAll({
+      where: { deleted: false },
+      include: [
+        { model: Category, attributes: ['id', 'name'], required: false },
+        { model: Subcategory, attributes: ['id', 'name'], required: false }
+      ],
+      order: [['name', 'ASC']],
+    });
+  }
+
+  // Метод для админки с фильтрами - включает изображения
+  async searchProductsForAdmin(filters: {
     search?: string;
     categoryId?: number;
     subcategoryId?: number;

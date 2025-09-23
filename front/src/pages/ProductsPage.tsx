@@ -72,6 +72,8 @@ const ProductsPage: React.FC = () => {
     categoryId: '',
     subcategoryId: '',
     isAvailable: true,
+    image: '',
+    minQuantity: 1,
   });
 
   // Меню действий
@@ -173,6 +175,8 @@ const ProductsPage: React.FC = () => {
         categoryId: product.categoryId.toString(),
         subcategoryId: product.subcategoryId?.toString() || '',
         isAvailable: product.isAvailable,
+        image: product.image || '',
+        minQuantity: product.minQuantity || 1,
       });
     } else {
       setEditingProduct(null);
@@ -183,6 +187,8 @@ const ProductsPage: React.FC = () => {
         categoryId: '',
         subcategoryId: '',
         isAvailable: true,
+        image: '',
+        minQuantity: 1,
       });
     }
     setOpen(true);
@@ -216,6 +222,49 @@ const ProductsPage: React.FC = () => {
     } catch (error) {
       console.error('Ошибка сохранения:', error);
       showSnackbar('Ошибка сохранения', 'error');
+    }
+  };
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const readAsDataURL = (f: File) => new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(f);
+    });
+
+    const compressDataUrl = (dataUrl: string, maxSize = 1024, quality = 0.75): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let { width, height } = img;
+          const scale = Math.min(1, maxSize / Math.max(width, height));
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return reject(new Error('Canvas context not available'));
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', quality);
+          resolve(compressed);
+        };
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+
+    try {
+      const original = await readAsDataURL(file);
+      const compressed = await compressDataUrl(original, 1024, 0.75);
+      setFormData(prev => ({ ...prev, image: compressed }));
+      showSnackbar('Изображение оптимизировано и добавлено', 'success');
+    } catch (err) {
+      console.error('Ошибка обработки изображения', err);
+      showSnackbar('Ошибка обработки изображения', 'error');
     }
   };
 
@@ -399,6 +448,7 @@ const ProductsPage: React.FC = () => {
                 <TableCell>Продукт</TableCell>
                 <TableCell>Категория</TableCell>
                 <TableCell>Цена</TableCell>
+                <TableCell>Мин. заказ</TableCell>
                 <TableCell>Статус</TableCell>
                 <TableCell>Дата создания</TableCell>
                 <TableCell>Действия</TableCell>
@@ -413,9 +463,17 @@ const ProductsPage: React.FC = () => {
                   <TableRow key={product.id} hover>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                        <Avatar sx={{ mr: 2, bgcolor: 'primary.main' }}>
-                          <InventoryIcon />
-                        </Avatar>
+                        {product.image ? (
+                          <Avatar 
+                            variant="rounded" 
+                            src={product.image} 
+                            sx={{ mr: 2, width: 48, height: 48 }}
+                          />
+                        ) : (
+                          <Avatar sx={{ mr: 2, bgcolor: 'primary.main', width: 48, height: 48 }}>
+                            <InventoryIcon />
+                          </Avatar>
+                        )}
                         <Box>
                           <Typography variant="subtitle2">
                   {product.name}
@@ -445,6 +503,11 @@ const ProductsPage: React.FC = () => {
                       <Typography variant="body2" fontWeight="bold" color="primary">
                     {product.price} ₽
                   </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {product.minQuantity || 1}
+                      </Typography>
                     </TableCell>
                     <TableCell>
                   <Chip
@@ -547,6 +610,18 @@ const ProductsPage: React.FC = () => {
             onChange={(e) => setFormData({ ...formData, price: e.target.value })}
             sx={{ mb: 2 }}
           />
+          <TextField
+            margin="dense"
+            label="Минимальное количество"
+            type="number"
+            fullWidth
+            variant="outlined"
+            value={formData.minQuantity}
+            onChange={(e) => setFormData({ ...formData, minQuantity: parseInt(e.target.value) || 1 })}
+            inputProps={{ min: 1 }}
+            sx={{ mb: 2 }}
+            helperText="Минимальное количество для заказа (по умолчанию 1)"
+          />
           <FormControl fullWidth sx={{ mb: 2 }}>
             <InputLabel>Категория</InputLabel>
             <Select
@@ -589,6 +664,21 @@ const ProductsPage: React.FC = () => {
             }
             label="Доступен для заказа"
           />
+
+          {/* Загрузка изображения */}
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>Изображение товара</Typography>
+            <Button variant="outlined" component="label">
+              Загрузить файл
+              <input hidden type="file" accept="image/*" onChange={handleImageChange} />
+            </Button>
+            {formData.image && (
+              <Box sx={{ mt: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Avatar variant="rounded" src={formData.image} sx={{ width: 64, height: 64 }} />
+                <Button color="error" onClick={() => setFormData(prev => ({ ...prev, image: '' }))}>Удалить</Button>
+              </Box>
+            )}
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleClose}>Отмена</Button>

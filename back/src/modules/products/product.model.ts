@@ -46,7 +46,7 @@ export class Product extends Model {
   price: number;
 
   @Column({
-    type: DataType.STRING,
+    type: DataType.TEXT, // base64 может быть длинным
     allowNull: true,
   })
   image: string;
@@ -62,6 +62,13 @@ export class Product extends Model {
     defaultValue: false,
   })
   deleted: boolean;
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    defaultValue: 1,
+  })
+  minQuantity: number;
 
   @BelongsTo(() => Category)
   category: Category;

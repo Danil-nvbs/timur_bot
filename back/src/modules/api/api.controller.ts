@@ -123,7 +123,8 @@ export class ApiController {
     if (subcategoryId) filters.subcategoryId = parseInt(subcategoryId);
     if (isAvailable !== undefined) filters.isAvailable = isAvailable === 'true';
     
-    const products = await this.productsService.searchProducts(filters);
+    // Используем метод для админки с изображениями
+    const products = await this.productsService.searchProductsForAdmin(filters);
     console.log('API: Найдено продуктов:', products.length);
     return products;
   }
