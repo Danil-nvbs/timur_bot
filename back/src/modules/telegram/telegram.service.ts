@@ -691,30 +691,58 @@ export class TelegramService implements OnModuleInit {
           const buffer = Buffer.from(base64Payload, 'base64');
           const filename = `product.${mime.split('/')[1] || 'jpg'}`;
 
-          // Если пришли сюда из callback, сначала обновим сообщение на "Загружаем фото..." чтобы избежать ошибки edit при sendPhoto
           if (ctx.callbackQuery) {
-            await ctx.editMessageText('📷 Загружаем фото товара...');
-          }
-
-          await this.bot.api.sendPhoto(
-            ctx.chat.id,
-            new InputFile(buffer, filename),
-            {
-              caption,
-              reply_markup: { inline_keyboard: keyboard },
+            // Если это callback (обновление), используем editMessageMedia
+            try {
+              await this.bot.api.editMessageMedia(
+                ctx.chat.id,
+                ctx.callbackQuery.message.message_id,
+                {
+                  type: 'photo',
+                  media: new InputFile(buffer, filename),
+                  caption,
+                }
+              );
+              // Обновляем клавиатуру отдельно
+              await this.bot.api.editMessageReplyMarkup(
+                ctx.chat.id,
+                ctx.callbackQuery.message.message_id,
+                { reply_markup: { inline_keyboard: keyboard } }
+              );
+            } catch (editError) {
+              // Если не удалось отредактировать медиа, отправляем новое сообщение
+              this.logger.warn('Не удалось отредактировать медиа, отправляем новое: ' + (editError as any)?.message);
+              await this.bot.api.sendPhoto(
+                ctx.chat.id,
+                new InputFile(buffer, filename),
+                {
+                  caption,
+                  reply_markup: { inline_keyboard: keyboard },
+                }
+              );
             }
-          );
+          } else {
+            // Если это новое сообщение, отправляем фото
+            await this.bot.api.sendPhoto(
+              ctx.chat.id,
+              new InputFile(buffer, filename),
+              {
+                caption,
+                reply_markup: { inline_keyboard: keyboard },
+              }
+            );
+          }
         } catch (e) {
           this.logger.warn('Не удалось отправить фото, показываю текст: ' + (e as any)?.message);
           if (ctx.callbackQuery) {
-            await ctx.editMessageText(caption, { reply_markup: { inline_keyboard: keyboard } });
+            await this.safeEditMessage(ctx, caption, { reply_markup: { inline_keyboard: keyboard } });
           } else {
             await ctx.reply(caption, { reply_markup: { inline_keyboard: keyboard } });
           }
         }
       } else {
         if (ctx.callbackQuery) {
-          await ctx.editMessageText(caption, { reply_markup: { inline_keyboard: keyboard } });
+          await this.safeEditMessage(ctx, caption, { reply_markup: { inline_keyboard: keyboard } });
         } else {
           await ctx.reply(caption, { reply_markup: { inline_keyboard: keyboard } });
         }
@@ -770,6 +798,9 @@ export class TelegramService implements OnModuleInit {
         text: message, 
         show_alert: false 
       });
+      
+      // Обновляем карточку товара с новым количеством в корзине
+      await this.showProduct(ctx, productId);
       
     } catch (error) {
       this.logger.error('Ошибка добавления в корзину:', error);
