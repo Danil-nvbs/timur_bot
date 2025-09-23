@@ -5,11 +5,9 @@ import {
   Toolbar,
   Typography,
   Box,
-  IconButton,
   Button,
 } from '@mui/material';
 import {
-  AccountCircle,
   Logout,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
@@ -27,9 +25,6 @@ const Header: React.FC = () => {
           <Typography variant="body2" sx={{ mr: 2 }}>
             Привет, {user?.firstName}!
           </Typography>
-          <IconButton color="inherit">
-            <AccountCircle />
-          </IconButton>
           <Button
             color="inherit"
             startIcon={<Logout />}
