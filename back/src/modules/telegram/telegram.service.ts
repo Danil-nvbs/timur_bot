@@ -266,6 +266,9 @@ export class TelegramService implements OnModuleInit {
           case 'checkout':
             await this.showCheckout(ctx);
             break;
+          case 'checkout_tricolor':
+            await this.showCheckout(ctx, true);
+            break;
           case 'confirm_order':
             await this.confirmOrder(ctx);
           break;
@@ -848,7 +851,7 @@ export class TelegramService implements OnModuleInit {
       
       // Проверяем минимальную сумму заказа
       if (total < this.MIN_ORDER_AMOUNT) {
-        message += `\n\n⚠️ Заказ доступен от ${this.MIN_ORDER_AMOUNT} ₽`;
+        message += `\n\n⚠️ Заказ доступен от ${this.MIN_ORDER_AMOUNT} ₽, заказ в ЖК Триколор доступен на любую сумму`;
       }
 
       const keyboard = []
@@ -861,22 +864,19 @@ export class TelegramService implements OnModuleInit {
         keyboard.push([{ text: `🗑 ${item.product.name}`, callback_data: `cart_remove_${item.id}` }])
       }
 
-      // Показываем кнопку "Оформить заказ" только если сумма >= MIN_ORDER_AMOUNT
+      // Кнопки оформления заказа (в столбик)
       if (total >= this.MIN_ORDER_AMOUNT) {
-        keyboard.push([
-          { text: '✅ Оформить заказ', callback_data: 'checkout' },
-          { text: '🗑 Очистить корзину', callback_data: 'cart_clear' }
-        ]);
+        keyboard.push([{ text: '✅ Оформить заказ', callback_data: 'checkout' }]);
+        keyboard.push([{ text: '🏙 Оформить заказ (ЖК Триколор)', callback_data: 'checkout_tricolor' }]);
+        keyboard.push([{ text: '🗑 Очистить корзину', callback_data: 'cart_clear' }]);
       } else {
-        keyboard.push([
-          { text: '🗑 Очистить корзину', callback_data: 'cart_clear' }
-        ]);
+        keyboard.push([{ text: '🏙 Оформить заказ (ЖК Триколор)', callback_data: 'checkout_tricolor' }]);
+        keyboard.push([{ text: '🗑 Очистить корзину', callback_data: 'cart_clear' }]);
       }
-      
-      keyboard.push([
-        { text: '🛒 Продолжить покупки', callback_data: 'catalog' },
-        { text: '🏠 Главное меню', callback_data: 'back_to_menu' }
-      ]);
+
+      // Навигация (в столбик)
+      keyboard.push([{ text: '🛒 Продолжить покупки', callback_data: 'catalog' }]);
+      keyboard.push([{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]);
   
       await ctx.editMessageText(message, {
         reply_markup: {
@@ -1028,7 +1028,7 @@ export class TelegramService implements OnModuleInit {
     }
   }
   
-  private async showCheckout(ctx: any) {
+  private async showCheckout(ctx: any, bypassMinAmount: boolean = false) {
     try {
       const user = await this.usersService.findByTelegramId(ctx.from.id);
       if (!user) {
@@ -1044,8 +1044,8 @@ export class TelegramService implements OnModuleInit {
         return;
       }
 
-      // Проверяем минимальную сумму заказа
-      if (total < this.MIN_ORDER_AMOUNT) {
+      // Проверяем минимальную сумму заказа, если не bypass
+      if (!bypassMinAmount && total < this.MIN_ORDER_AMOUNT) {
         await ctx.editMessageText(
           `❌ Заказ доступен от ${this.MIN_ORDER_AMOUNT} ₽\n\nВаша сумма: ${total} ₽`,
           {
