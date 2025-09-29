@@ -46,6 +46,8 @@ export interface Product {
   subcategoryId?: number;
   isAvailable: boolean;
   deleted: boolean;
+  unit?: string;
+  step?: number;
   minQuantity: number;
   createdAt: string;
   updatedAt: string;

@@ -74,6 +74,8 @@ const ProductsPage: React.FC = () => {
     isAvailable: true,
     image: '',
     minQuantity: 1,
+    unit: 'кг',
+    step: 1,
   });
 
   // Меню действий
@@ -177,6 +179,8 @@ const ProductsPage: React.FC = () => {
         isAvailable: product.isAvailable,
         image: product.image || '',
         minQuantity: product.minQuantity || 1,
+        unit: (product as any).unit || 'кг',
+        step: (product as any).step || 1,
       });
     } else {
       setEditingProduct(null);
@@ -189,6 +193,8 @@ const ProductsPage: React.FC = () => {
         isAvailable: true,
         image: '',
         minQuantity: 1,
+        unit: 'кг',
+        step: 1,
       });
     }
     setOpen(true);
@@ -448,6 +454,7 @@ const ProductsPage: React.FC = () => {
                 <TableCell>Продукт</TableCell>
                 <TableCell>Категория</TableCell>
                 <TableCell>Цена</TableCell>
+                <TableCell>Ед./Шаг</TableCell>
                 <TableCell>Мин. заказ</TableCell>
                 <TableCell>Статус</TableCell>
                 <TableCell>Дата создания</TableCell>
@@ -503,6 +510,11 @@ const ProductsPage: React.FC = () => {
                       <Typography variant="body2" fontWeight="bold" color="primary">
                     {product.price} ₽
                   </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {(product as any).unit || 'кг'} / {(product as any).step || 1}
+                      </Typography>
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2" color="text.secondary">
@@ -654,6 +666,30 @@ const ProductsPage: React.FC = () => {
                 ))}
             </Select>
           </FormControl>
+
+          <TextField
+            margin="dense"
+            label="Единица измерения"
+            fullWidth
+            variant="outlined"
+            value={formData.unit}
+            onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+            sx={{ mb: 2 }}
+            helperText="Например: кг, шт., грамм, лоток"
+          />
+
+          <TextField
+            margin="dense"
+            label="Шаг заказа"
+            type="number"
+            fullWidth
+            variant="outlined"
+            value={formData.step}
+            onChange={(e) => setFormData({ ...formData, step: parseInt(e.target.value) || 1 })}
+            inputProps={{ min: 1 }}
+            sx={{ mb: 2 }}
+            helperText="Например: 1 для шт./кг, 100 для 100 грамм"
+          />
           
           <FormControlLabel
             control={

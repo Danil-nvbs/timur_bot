@@ -7,6 +7,7 @@ import { Roles } from '../../decorators/roles.decorator';
 import { RolesGuard } from '../../guards/roles.guard';
 import { AuthGuard } from '@nestjs/passport';
 import { CategoriesService } from '../categories/categories.service';
+import { ReviewsService } from '../reviews/reviews.service';
 
 @Controller()
 export class ApiController {
@@ -15,6 +16,7 @@ export class ApiController {
     private readonly productsService: ProductsService,
     private readonly ordersService: OrdersService,
     private readonly categoriesService: CategoriesService,
+    private readonly reviewsService: ReviewsService,
   ) {}
 
   // Статистика для дашборда
@@ -132,7 +134,13 @@ export class ApiController {
   @Get('products/:id')
   @UseGuards(JwtAuthGuard)
   async getProduct(@Param('id') id: string) {
-    return this.productsService.findById(+id);
+    const product = await this.productsService.findById(+id);
+    // прикрепляем рейтинг и 5 последних отзывов для админки
+    const [stats, lastReviews] = await Promise.all([
+      this.reviewsService.getProductStats(product.id),
+      this.reviewsService.findByProduct(product.id, 0, 5),
+    ]);
+    return { ...product.toJSON(), rating: stats.avg, reviewsCount: stats.count, lastReviews } as any;
   }
 
   @Post('products')

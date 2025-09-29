@@ -64,6 +64,20 @@ export class Product extends Model {
   deleted: boolean;
 
   @Column({
+    type: DataType.STRING,
+    allowNull: true,
+    defaultValue: 'кг',
+  })
+  unit: string; // единица измерения (например, "шт.", "грамм", "лоток")
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    defaultValue: 1,
+  })
+  step: number; // шаг заказа (например, 1 для шт., 100 для грамм)
+
+  @Column({
     type: DataType.INTEGER,
     allowNull: true,
     defaultValue: 1,

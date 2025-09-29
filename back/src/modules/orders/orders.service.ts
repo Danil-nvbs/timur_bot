@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Order } from './orders.model';
 import { OrderItem } from './orders-item.model';
 import { User } from '../users/user.model';
 import { Product } from '../products/product.model';
+import { TelegramService } from '../telegram/telegram.service';
 
 @Injectable()
 export class OrdersService {
@@ -12,6 +13,7 @@ export class OrdersService {
     private orderModel: typeof Order,
     @InjectModel(OrderItem)
     private orderItemModel: typeof OrderItem,
+    @Inject(forwardRef(() => TelegramService)) private readonly telegramService: TelegramService,
   ) {}
 
   async createOrder(userId: number, orderData: any): Promise<Order> {
@@ -64,7 +66,10 @@ export class OrdersService {
 
   async updateOrderStatus(orderId: number, status: string): Promise<Order> {
     await this.orderModel.update({ status }, { where: { id: orderId } });
-    return this.orderModel.findByPk(orderId);
+    const order = await this.orderModel.findByPk(orderId);
+    // Обновляем сообщение статуса в боте (если отслеживается)
+    try { await this.telegramService.updateOrderStatusMessage(orderId, status); } catch {}
+    return order;
   }
 
   async updateOrderTotal(orderId: number, totalPrice: number): Promise<Order> {
@@ -73,7 +78,19 @@ export class OrdersService {
   }
 
   async getOrderById(orderId: number): Promise<Order> {
-    return this.orderModel.findByPk(orderId);
+    return this.orderModel.findByPk(orderId, {
+      include: [
+        {
+          model: OrderItem,
+          include: [
+            {
+              model: Product,
+              attributes: ['id', 'name', 'price'],
+            },
+          ],
+        },
+      ],
+    });
   }
 
   async createOrderItem(orderItemData: any): Promise<OrderItem> {

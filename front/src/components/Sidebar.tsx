@@ -16,6 +16,7 @@ import {
   Inventory,
   Category,
   People,
+  RateReview,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -26,6 +27,7 @@ const menuItems = [
   { text: 'Продукты', icon: <Inventory />, path: '/products' },
   { text: 'Категории', icon: <Category />, path: '/categories' },
   { text: 'Пользователи', icon: <People />, path: '/users' },
+  { text: 'Отзывы', icon: <RateReview />, path: '/reviews' },
 ];
 
 const Sidebar: React.FC = () => {

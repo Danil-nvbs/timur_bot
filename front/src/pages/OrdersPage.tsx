@@ -238,7 +238,7 @@ const OrdersPage: React.FC = () => {
                               {item.product?.name || 'Неизвестный товар'} × {item.quantity}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                              ({item.price} ₽)
+                              ({item.price * item.quantity} ₽)
                             </Typography>
                           </Box>
                         ))}

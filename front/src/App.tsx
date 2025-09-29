@@ -14,6 +14,7 @@ import ProductsPage from './pages/ProductsPage';
 import CategoriesPage from './pages/CategoriesPage';
 import UsersPage from './pages/UsersPage';
 import DashboardPage from './pages/DashboardPage';
+import ReviewsPage from './pages/ReviewsPage';
 
 const theme = createTheme({
   palette: {
@@ -49,6 +50,7 @@ const AppRoutes: React.FC = () => {
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/users" element={<UsersPage />} />
+          <Route path="/reviews" element={<ReviewsPage />} />
         </Routes>
       </Box>
     </Box>

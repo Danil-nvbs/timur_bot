@@ -5,12 +5,15 @@ import { ProductsService } from '../products/products.service';
 import { OrdersService } from '../orders/orders.service';
 import { CategoriesService } from '../categories/categories.service';
 import { CartService } from '../cart/cart.service';
+import { ReviewsService } from '../reviews/reviews.service';
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private readonly logger = new Logger(TelegramService.name);
   private readonly MIN_ORDER_AMOUNT = 3000; // Минимальная сумма заказа в рублях
   private bot: Bot;
+  // Сообщения статуса заказа: orderId -> { chatId, messageId }
+  private orderStatusMessages = new Map<number, { chatId: number; messageId: number }>();
   
   // Состояние для отслеживания процесса оформления заказа
   private orderStates = new Map<number, { step: 'address' | 'confirm', tempOrder: any }>();
@@ -21,6 +24,7 @@ export class TelegramService implements OnModuleInit {
     private readonly ordersService: OrdersService,
     private readonly categoriesService: CategoriesService,
     private readonly cartService: CartService,
+    private readonly reviewsService: ReviewsService,
   ) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     
@@ -225,17 +229,93 @@ export class TelegramService implements OnModuleInit {
           return;
         }
 
+        // Проверяем, ожидаем ли текст отзыва
+        const pending = this.pendingReviews.get(user.id);
+        if (pending) {
+          try {
+            await this.reviewsService.create({
+              userId: user.id,
+              productId: pending.target === 'product' ? pending.id : null,
+              orderId: pending.orderId || (pending.target === 'order' ? pending.id : null),
+              rating: pending.rating,
+              text,
+              photos: pending.photos && pending.photos.length ? pending.photos : null,
+              hidden: false,
+            } as any);
+            const backCb = 'reviews_pending';
+            this.pendingReviews.delete(user.id);
+            await ctx.reply('✅ Спасибо! Ваш отзыв сохранён.', { reply_markup: { inline_keyboard: [[{ text: '🔙 Вернуться', callback_data: backCb }], [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]] } });
+          } catch (e) {
+            this.logger.error('Ошибка сохранения отзыва:', e);
+            const msg = (e as any)?.message?.includes('уже оставлен') ? `❌ ${(e as any).message}` : '❌ Не удалось сохранить отзыв. Попробуйте позже.';
+            await ctx.reply(msg);
+          }
+          return;
+        }
+
         // Если пользователь не в процессе оформления заказа, показываем главное меню
         await this.showMainMenu(ctx, user.toJSON());
       });
 
+      // Приём фото с подписью как отзыв (поддержка нескольких фото: пользователь может отправить по одному, мы копим)
+      this.bot.on('message:photo', async (ctx) => {
+        const user = await this.usersService.findByTelegramId(ctx.from.id);
+        if (!user) return;
+        const pending = this.pendingReviews.get(user.id);
+        if (!pending) return; // фото не в контексте отзыва
+        try {
+          const photos = ctx.message.photo || [];
+          const best = photos[photos.length - 1];
+          const fileId = best?.file_id;
+          if (!fileId) return;
+          const file = await this.bot.api.getFile(fileId);
+          const url = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+          // Загружаем как base64
+          const res = await fetch(url);
+          const buf = Buffer.from(await res.arrayBuffer());
+          const b64 = `data:image/jpeg;base64,${buf.toString('base64')}`;
+          // Если есть caption — считаем это финализацией и сохраняем; если нет — копим фото и ждём caption в следующем сообщении
+          const state = this.pendingReviews.get(user.id);
+          if (!state) return;
+          state.photos.push(b64);
+          this.pendingReviews.set(user.id, state);
+          if (ctx.message.caption) {
+            // Если пришла подпись вместе с фото — сохраняем сразу
+            await this.reviewsService.create({
+              userId: user.id,
+              productId: state.target === 'product' ? state.id : null,
+              orderId: state.orderId || (state.target === 'order' ? state.id : null),
+              rating: state.rating,
+              text: ctx.message.caption,
+              photos: state.photos,
+              hidden: false,
+            } as any);
+            const backCb = 'reviews_pending';
+            this.pendingReviews.delete(user.id);
+            await ctx.reply('✅ Спасибо! Ваш отзыв с фото сохранён.', { reply_markup: { inline_keyboard: [[{ text: '🔙 Вернуться', callback_data: backCb }], [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]] } });
+          } else {
+            await ctx.reply('📷 Фото добавлено. Можете отправить ещё фото или подпись (текст), чтобы сохранить отзыв.');
+          }
+        } catch (e) {
+          this.logger.error('Ошибка сохранения фото-отзыва:', e);
+          const msg = (e as any)?.message?.includes('уже оставлен') ? `❌ ${(e as any).message}` : '❌ Не удалось сохранить фото-отзыв. Попробуйте позже.';
+          await ctx.reply(msg);
+        }
+      });
+
       // Обработка callback кнопок
-    this.bot.on('callback_query:data', async (ctx) => {
+      this.bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data;
         
         console.log(`🔘 Нажата кнопка: ${data}`);
       
       switch (data) {
+        case 'reviews_more_global':
+          await this.showLatestReviews(ctx, 0);
+          break;
+        case 'reviews_pending':
+          await this.showPendingReviews(ctx);
+          break;
         case 'catalog':
           await this.showCatalog(ctx);
           break;
@@ -282,6 +362,62 @@ export class TelegramService implements OnModuleInit {
             } else if (data.startsWith('product_')) {
               const productId = parseInt(data.replace('product_', ''));
               await this.showProduct(ctx, productId);
+            } else if (data.startsWith('product_reviews_')) {
+              const productId = parseInt(data.replace('product_reviews_', ''));
+              await this.showProductReviews(ctx, productId, 0);
+            } else if (data.startsWith('product_reviews_more_')) {
+              const [_, __, id, off] = data.split('_');
+              await this.showProductReviews(ctx, parseInt(id), parseInt(off || '0'));
+            } else if (data.startsWith('reviews_more_global_')) {
+              const parts = data.split('_');
+              const off = parseInt(parts[parts.length - 1] || '0');
+              await this.showLatestReviews(ctx, off);
+            } else if (data.startsWith('review_target_product_')) {
+              const parts = data.split('_');
+              // patterns: review_target_product_{productId} OR review_target_product_{productId}_{orderId}
+              const productId = parseInt(parts[3]);
+              const orderId = parts.length >= 5 ? parseInt(parts[4]) : undefined;
+              // Если пришло из заказа и уже есть отзыв — не даём продолжить
+              if (orderId) {
+                const user = await this.usersService.findByTelegramId(ctx.from.id);
+                if (user) {
+                  const exists = await this.reviewsService.existsForOrderProduct(user.id, orderId, productId);
+                  if (exists) {
+                    await ctx.answerCallbackQuery({ text: '❌ Отзыв по этому товару уже оставлен', show_alert: true });
+                    await this.showOrderItemsForReview(ctx, orderId);
+                    return;
+                  }
+                }
+              }
+              await this.askRating(ctx, 'product', productId, orderId);
+            } else if (data.startsWith('review_target_order_')) {
+              const orderId = parseInt(data.replace('review_target_order_', ''));
+              await this.showOrderItemsForReview(ctx, orderId);
+            } else if (data.startsWith('ask_rating_order_')) {
+              const orderId = parseInt(data.replace('ask_rating_order_', ''));
+              await this.askRating(ctx, 'order', orderId);
+            } else if (data.startsWith('review_rate_')) {
+              const parts = data.split('_');
+              // patterns:
+              // review_rate_order_{orderId}_{rating}
+              // review_rate_product_{productId}_{rating}
+              // review_rate_product_{productId}_{orderId}_{rating}
+              const target = parts[2] as 'product' | 'order';
+              if (target === 'order') {
+                const orderId = parseInt(parts[3]);
+                const rating = parseInt(parts[4]);
+                await this.startReviewText(ctx, 'order', orderId, rating, undefined);
+              } else {
+                const productId = parseInt(parts[3]);
+                let orderId: number | undefined = undefined;
+                let ratingIdx = 4;
+                if (parts.length === 6) {
+                  orderId = parseInt(parts[4]);
+                  ratingIdx = 5;
+                }
+                const rating = parseInt(parts[ratingIdx]);
+                await this.startReviewText(ctx, 'product', productId, rating, orderId);
+              }
             } else if (data.startsWith('add_to_cart_')) {
               const productId = parseInt(data.replace('add_to_cart_', ''));
               await this.addToCart(ctx, productId);
@@ -334,11 +470,32 @@ export class TelegramService implements OnModuleInit {
           [{ text: '🛒 Каталог товаров', callback_data: 'catalog' }],
           [{ text: `🛍 Корзина ${cartCount > 0 ? `(${cartCount})` : ''}`, callback_data: 'cart' }],
           [{ text: '📋 Мои заказы', callback_data: 'my_orders' }],
+          [{ text: '⭐ Отзывы', callback_data: 'reviews_more_global' }],
           [{ text: 'ℹ️ О нас', callback_data: 'about' }],
           [{ text: '📞 Поддержка', callback_data: 'support' }]
         ]
       }
     }
+    // Если есть заказы, где есть ещё что отревьювить — показываем отдельную кнопку "Ожидают отзывов"
+    try {
+      const orders = await this.ordersService.getUserOrders(user.id);
+      const delivered = orders.filter((o: any) => o.status === 'delivered');
+      let hasPending = false;
+      for (const o of delivered) {
+        const orderReviewed = await this.reviewsService.existsForOrderByUser(user.id, o.id);
+        if (!orderReviewed) { hasPending = true; break; }
+        if (o.orderItems && o.orderItems.length > 0) {
+          for (const it of o.orderItems) {
+            const itemReviewed = await this.reviewsService.existsForOrderProduct(user.id, o.id, it.productId);
+            if (!itemReviewed) { hasPending = true; break; }
+          }
+        }
+        if (hasPending) break;
+      }
+      if (hasPending) {
+        (options.reply_markup.inline_keyboard as any[]).splice(3, 0, [{ text: '🕒 Ожидают отзывов', callback_data: 'reviews_pending' }]);
+      }
+    } catch {}
     
     if (ctx.callbackQuery) {
       await this.safeEditMessage(ctx, message, options);
@@ -497,6 +654,191 @@ export class TelegramService implements OnModuleInit {
     );
   }
 
+  private async showReviewsMenu(ctx: any) {
+    const message = '⭐ Отзывы\n\nЗдесь вы можете посмотреть последние отзывы или оставить свои.';
+    await this.safeEditMessage(ctx, message, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🆕 Последние отзывы', callback_data: 'reviews_more_global' }],
+          [{ text: '🕒 Ожидают отзывов', callback_data: 'reviews_pending' }],
+          [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }],
+        ]
+      }
+    });
+  }
+
+  private async showPendingReviews(ctx: any) {
+    const user = await this.usersService.findByTelegramId(ctx.from.id);
+    if (!user) {
+      await this.safeEditMessage(ctx, '❌ Пользователь не найден');
+      return;
+    }
+    const orders = await this.ordersService.getUserOrders(user.id);
+    const delivered = orders.filter((o: any) => o.status === 'delivered');
+    if (delivered.length === 0) {
+      await this.safeEditMessage(ctx, 'Пока нет заказов, ожидающих отзывов.', { reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'reviews_menu' }]] } });
+      return;
+    }
+    let message = '🕒 Ожидают отзывов:\n\n';
+    const keyboard = [] as any[];
+    for (const o of delivered) {
+      const orderReviewed = await this.reviewsService.existsForOrderByUser(user.id, o.id);
+      // Проверим, остались ли товары без отзывов
+      let hasRemainingItems = false;
+      if (o.orderItems && o.orderItems.length > 0) {
+        for (const it of o.orderItems) {
+          const itemReviewed = await this.reviewsService.existsForOrderProduct(user.id, o.id, it.productId);
+          if (!itemReviewed) { hasRemainingItems = true; break; }
+        }
+      }
+      // Если уже есть отзыв по заказу и нет оставшихся товаров — пропускаем заказ
+      if (orderReviewed && !hasRemainingItems) {
+        continue;
+      }
+
+      message += `Заказ #${o.id} — ${new Date(o.createdAt).toLocaleDateString('ru-RU')}\n`;
+      const row: any[] = [];
+      if (hasRemainingItems) {
+        row.push({ text: `Товары заказа`, callback_data: `review_target_order_${o.id}` });
+      }
+      if (!orderReviewed) {
+        row.push({ text: `Отзыв о заказе`, callback_data: `ask_rating_order_${o.id}` });
+      }
+      // На случай если обе кнопки отсутствуют (не должно дойти сюда), пропустим
+      if (row.length > 0) {
+        keyboard.push(row);
+      }
+    }
+    if (keyboard.length === 0) {
+      await this.safeEditMessage(ctx, 'Пока нет заказов, ожидающих отзывов.', { reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'reviews_menu' }]] } });
+      return;
+    }
+    keyboard.push([{ text: '🔙 Назад', callback_data: 'reviews_menu' }]);
+    await this.safeEditMessage(ctx, message, { reply_markup: { inline_keyboard: keyboard } });
+  }
+
+  private async showOrderItemsForReview(ctx: any, orderId: number) {
+    try {
+      const order = await this.ordersService.getOrderById(orderId);
+      if (!order || !order.orderItems || order.orderItems.length === 0) {
+        await this.safeEditMessage(ctx, '❌ Заказ не найден или пуст.', { reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'reviews_pending' }]] } });
+        return;
+      }
+      const user = await this.usersService.findByTelegramId(ctx.from.id);
+      const keyboard: any[] = [];
+
+      // Фильтруем товары, по которым ещё нет отзыва
+      const remaining: typeof order.orderItems = [] as any;
+      console.log(order.orderItems)
+      for (const item of order.orderItems) {
+        console.log(await this.reviewsService.existsForOrderProduct(user.id, orderId, item.productId))
+        const already = user ? await this.reviewsService.existsForOrderProduct(user.id, orderId, item.productId) : false;
+        if (!already) remaining.push(item);
+      }
+
+      let message = `Заказ #${orderId}\n`;
+      if (remaining.length > 0) {
+        message += 'Выберите товар для отзыва или оставьте отзыв о заказе целиком:';
+        for (const item of remaining) {
+          const name = item.product?.name || `Товар ${item.productId}`;
+          keyboard.push([{ text: name, callback_data: `review_target_product_${item.productId}_${orderId}` }]);
+        }
+      } else {
+        message += 'По этому заказу отзывы уже оставлены по всем товарам.';
+      }
+
+      // Добавляем кнопку отзыва по заказу целиком, только если его ещё нет
+      if (user) {
+        const orderReviewed = await this.reviewsService.existsForOrderByUser(user.id, orderId);
+        if (!orderReviewed) {
+          keyboard.push([{ text: '📝 Отзыв о заказе целиком', callback_data: `ask_rating_order_${orderId}` }]);
+        }
+      }
+      keyboard.push([{ text: '🔙 Назад', callback_data: 'reviews_pending' }]);
+
+      await this.safeEditMessage(ctx, message, { reply_markup: { inline_keyboard: keyboard } });
+    } catch (e) {
+      this.logger.error('Ошибка загрузки заказа для отзывов:', e);
+      await this.safeEditMessage(ctx, '❌ Ошибка загрузки заказа', { reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'reviews_pending' }]] } });
+    }
+  }
+
+  private async showLatestReviews(ctx: any, offset: number = 0) {
+    let reviews = await this.reviewsService.findLatestOrdersOnly(offset, 10);
+    // Если отзывов по заказам нет, показываем любые отзывы (fallback)
+    if (!reviews || reviews.length === 0) {
+      reviews = await this.reviewsService.findLatestAll(offset, 10);
+    }
+    if (!reviews || reviews.length === 0) {
+      await this.safeEditMessage(ctx, 'Пока отзывов нет.', {
+        reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'back_to_menu' }]] }
+      });
+      return;
+    }
+    let message = '🆕 Последние отзывы:\n\n';
+    for (const r of reviews) {
+      const stars = '⭐'.repeat(r.rating || 0);
+      const short = (r.text || '').slice(0, 200);
+      message += `${stars} ${short}\n\n`;
+    }
+    const keyboard = [[{ text: '🔙 Назад', callback_data: 'back_to_menu' }]];
+    if (reviews.length === 10) {
+      keyboard.unshift([{ text: 'Ещё', callback_data: `reviews_more_global_${offset + 10}` }]);
+    }
+    await this.safeEditMessage(ctx, message, { reply_markup: { inline_keyboard: keyboard } });
+  }
+
+  private async showProductReviews(ctx: any, productId: number, offset: number = 0) {
+    const reviews = await this.reviewsService.findByProduct(productId, offset, 10);
+    let message = '💬 Отзывы о товаре:\n\n';
+    if (!reviews || reviews.length === 0) {
+      message += 'Пока отзывов нет.';
+    } else {
+      for (const r of reviews) {
+        const stars = '⭐'.repeat(r.rating || 0);
+        const short = (r.text || '').slice(0, 300);
+        message += `${stars} ${short}\n\n`;
+      }
+    }
+    const keyboard = [[{ text: '📝 Оставить отзыв', callback_data: `review_target_product_${productId}` }], [{ text: '🔙 Назад к товару', callback_data: `product_${productId}` }]];
+    if (reviews.length === 10) {
+      keyboard.unshift([{ text: 'Ещё отзывы', callback_data: `product_reviews_more_${productId}_${offset + 10}` }]);
+    }
+    await this.safeEditMessage(ctx, message, { reply_markup: { inline_keyboard: keyboard } });
+  }
+
+  // Начало оставления отзыва: получили рейтинг, ждём текст/фото
+  private pendingReviews = new Map<number, { target: 'product' | 'order'; id: number; rating: number; photos: string[]; orderId?: number }>();
+  private async askRating(ctx: any, target: 'product' | 'order', id: number, orderId?: number) {
+    const cb = (n: number) => target === 'product' && orderId
+      ? `review_rate_${target}_${id}_${orderId}_${n}`
+      : `review_rate_${target}_${id}_${n}`;
+    const starsRow = [1,2,3,4,5].map(n => ({ text: `${n}⭐`, callback_data: cb(n) }));
+    await this.safeEditMessage(ctx, 'Выберите оценку (1-5):', {
+      reply_markup: { inline_keyboard: [starsRow, [{ text: '🔙 Назад', callback_data: target === 'product' ? `product_${id}` : 'my_orders' }]] }
+    });
+  }
+  private async startReviewText(ctx: any, target: 'product' | 'order', id: number, rating: number, orderId?: number) {
+    const user = await this.usersService.findByTelegramId(ctx.from.id);
+    if (!user) {
+      await ctx.answerCallbackQuery({ text: '❌ Пользователь не найден', show_alert: false });
+      return;
+    }
+    // Если отзыв по товару в рамках заказа — проверим ещё раз, что отзыв не оставлен
+    if (target === 'product' && orderId) {
+      const exists = await this.reviewsService.existsForOrderProduct(user.id, orderId, id);
+      if (exists) {
+        await ctx.answerCallbackQuery({ text: '❌ Отзыв по этому товару уже оставлен', show_alert: true });
+        await this.showOrderItemsForReview(ctx, orderId);
+        return;
+      }
+    }
+    this.pendingReviews.set(user.id, { target, id, rating, photos: [], orderId });
+    await this.safeEditMessage(ctx, '✍️ Отправьте текст отзыва одним сообщением. Можете приложить фото с подписью.', {
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: target === 'product' ? `product_${id}` : 'my_orders' }]] }
+    });
+  }
+
   private async showCategory(ctx: any, categoryId: number) {
     try {
       const category = await this.categoriesService.findById(categoryId);
@@ -640,6 +982,12 @@ export class TelegramService implements OnModuleInit {
         return;
       }
       
+      // Рейтинг и последние отзывы (до 5)
+      const [stats, lastReviews] = await Promise.all([
+        this.reviewsService.getProductStats(productId),
+        this.reviewsService.findByProduct(productId, 0, 5),
+      ]);
+
       // Получаем количество товара в корзине пользователя
       const user = await this.usersService.findByTelegramId(ctx.from.id);
       let cartQuantity = 0;
@@ -653,8 +1001,14 @@ export class TelegramService implements OnModuleInit {
       messageTextLines.push(`🛍 ${product.name}`);
       messageTextLines.push('');
       messageTextLines.push(`💰 Цена: ${product.price} ₽`);
+      if (product.unit) {
+        messageTextLines.push(`📏 Единица измерения: ${product.unit}`);
+      }
       if (product.minQuantity && product.minQuantity > 1) {
         messageTextLines.push(`📦 Мин. заказ: ${product.minQuantity}`);
+      }
+      if (stats?.count) {
+        messageTextLines.push(`⭐ Рейтинг: ${stats.avg} (${stats.count})`);
       }
       if (cartQuantity > 0) {
         messageTextLines.push(`🛒 В корзине: ${cartQuantity} шт.`);
@@ -664,11 +1018,20 @@ export class TelegramService implements OnModuleInit {
         messageTextLines.push('📝 Описание:');
         messageTextLines.push(product.description);
       }
+      if (lastReviews && lastReviews.length > 0) {
+        messageTextLines.push('');
+        messageTextLines.push('💬 Последние отзывы:');
+        for (const r of lastReviews) {
+          const short = (r.text || '').slice(0, 100);
+          messageTextLines.push(`• ${'⭐'.repeat(r.rating)} ${short}`);
+        }
+      }
       messageTextLines.push('');
       messageTextLines.push(`📦 Доступен: ${product.isAvailable ? '✅ Да' : '❌ Нет'}`);
 
       const keyboard = [
         [{ text: '🛒 Добавить в корзину', callback_data: `add_to_cart_${product.id}` }],
+        [{ text: '💬 Отзывы', callback_data: `product_reviews_${product.id}` }],
         [{ text: '🛍 Перейти в корзину', callback_data: 'cart' }],
         [{ text: '🔙 Назад к товарам', callback_data: `category_${product.categoryId}` }],
         [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
@@ -780,19 +1143,23 @@ export class TelegramService implements OnModuleInit {
       const existingItem = existingCartItems.find(item => item.productId === productId);
       
       const minQuantity = product.minQuantity || 1;
-      let quantityToAdd = 1; // По умолчанию добавляем 1
+      const step = product.step || 1;
+      let quantityToAdd = step; // По умолчанию добавляем шаг
       let message = '';
       
       if (existingItem) {
-        // Товар уже в корзине - добавляем 1 штуку
-        quantityToAdd = 1;
-        message = `✅ ${product.name} (+1 шт.)`;
+        // Товар уже в корзине - добавляем шаг
+        quantityToAdd = step;
+        const unitLabel = product.unit ? ` ${product.unit}` : '';
+        message = `✅ ${product.name} (+${step}${unitLabel})`;
       } else {
         // Товара нет в корзине - добавляем минимальное количество
-        quantityToAdd = minQuantity;
-        message = minQuantity > 1 
-          ? `✅ ${product.name} добавлен в корзину (мин. ${minQuantity})!`
-          : `✅ ${product.name} добавлен в корзину!`;
+        // Если minQuantity меньше шага, стартуем со шага
+        quantityToAdd = Math.max(minQuantity, step);
+        const unitLabel = product.unit ? ` ${product.unit}` : '';
+        message = quantityToAdd > step 
+          ? `✅ ${product.name} добавлен в корзину (мин. ${quantityToAdd}${unitLabel})!`
+          : `✅ ${product.name} добавлен в корзину (${step}${unitLabel})!`;
       }
       
       await this.cartService.addToCart(user.id, productId, quantityToAdd);
@@ -843,8 +1210,9 @@ export class TelegramService implements OnModuleInit {
         const itemTotal = item.product.price * item.quantity;
         total += itemTotal;
         
+        const unitLabel = item.product.unit ? ` ${item.product.unit}` : '';
         message += `${index + 1}. ${item.product.name}\n`;
-        message += `   💰 ${item.product.price} ₽ × ${item.quantity} = ${itemTotal} ₽\n`;
+        message += `   💰 ${item.product.price} ₽ × ${item.quantity}${unitLabel} = ${itemTotal} ₽\n`;
       });
   
       message += `💳 Итого: ${total} ₽`;
@@ -957,7 +1325,8 @@ export class TelegramService implements OnModuleInit {
         return;
       }
   
-      const newQuantity = item.quantity + change;
+      const step = item.product.step || 1;
+      const newQuantity = item.quantity + change * step;
       const minQuantity = item.product.minQuantity || 1;
       
       if (newQuantity <= 0) {
@@ -967,12 +1336,12 @@ export class TelegramService implements OnModuleInit {
         // Если пытаемся уменьшить ниже минимума
         if (change < 0) {
           await ctx.answerCallbackQuery({ 
-            text: `❌ Это минимальный заказ (${minQuantity}), можно только удалить товар`, 
+            text: `❌ Это минимальный заказ (${minQuantity}${item.product.unit ? ` ${item.product.unit}` : ''}), можно только удалить товар`, 
             show_alert: true 
           });
         } else {
           await ctx.answerCallbackQuery({ 
-            text: `❌ Минимальное количество для ${item.product.name}: ${minQuantity}`, 
+            text: `❌ Минимальное количество для ${item.product.name}: ${minQuantity}${item.product.unit ? ` ${item.product.unit}` : ''}`, 
             show_alert: true 
           });
         }
@@ -1153,7 +1522,7 @@ export class TelegramService implements OnModuleInit {
       message += '⏳ Статус: Ожидает подтверждения\n\n';
       message += 'Мы свяжемся с вами для подтверждения заказа.';
 
-    await ctx.editMessageText(message, {
+    const updated = await ctx.editMessageText(message, {
       reply_markup: {
         inline_keyboard: [
             [{ text: '📋 Мои заказы', callback_data: 'my_orders' }],
@@ -1162,7 +1531,21 @@ export class TelegramService implements OnModuleInit {
         ],
       },
     });
-  
+
+      // Запоминаем сообщение, чтобы обновлять статус этим же сообщением
+      try {
+        // updated может быть Message
+        const msg: any = updated;
+        if (msg && msg.message_id && msg.chat?.id) {
+          this.orderStatusMessages.set(order.id, { chatId: msg.chat.id, messageId: msg.message_id });
+        } else if (ctx.callbackQuery?.message) {
+          // fallback: используем исходное сообщение
+          this.orderStatusMessages.set(order.id, { chatId: ctx.chat.id, messageId: ctx.callbackQuery.message.message_id });
+        }
+      } catch (e) {
+        this.logger.warn('Не удалось зафиксировать сообщение статуса заказа: ' + (e as any)?.message);
+      }
+
       // Уведомляем администраторов о новом заказе
       await this.notifyAdminsAboutNewOrder(order, user, orderTotal);
   
@@ -1191,6 +1574,21 @@ export class TelegramService implements OnModuleInit {
       }
     } catch (error) {
       this.logger.error('Ошибка уведомления админов:', error);
+    }
+  }
+
+  // Публичный метод: обновить сообщение статуса заказа, если мы его отслеживаем
+  async updateOrderStatusMessage(orderId: number, newStatus: string) {
+    try {
+      const link = this.orderStatusMessages.get(orderId);
+      if (!link) {
+        this.logger.warn(`Нет зафиксированного сообщения для заказа #${orderId}`);
+        return;
+      }
+      const text = `📦 Статус заказа #${orderId}: ${this.getOrderStatusText(newStatus)}`;
+      await this.bot.api.editMessageText(link.chatId, link.messageId, text);
+    } catch (e) {
+      this.logger.error('Ошибка обновления сообщения статуса заказа: ' + (e as any)?.message);
     }
   }
 

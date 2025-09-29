@@ -31,6 +31,16 @@ api.interceptors.response.use(
   },
   (error) => {
     console.error('❌ API Error:', error.config?.url, error.response?.status, error.response?.data || error.message);
+    // Перехват 401: очищаем токен и редиректим на страницу логина
+    if (error.response?.status === 401) {
+      try {
+        localStorage.removeItem('auth_token');
+      } catch {}
+      // Избежать бесконечного редиректа, если уже на /login
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
     return Promise.reject(error);
   }
 );
@@ -109,6 +119,15 @@ export const apiService = {
   createSubcategory: (subcategory: any) => api.post('/subcategories', subcategory).then(res => res.data),
   updateSubcategory: (id: number, subcategory: any) => api.put(`/subcategories/${id}`, subcategory).then(res => res.data),
   deleteSubcategory: (id: number) => api.delete(`/subcategories/${id}`).then(res => res.data),
+
+  // Отзывы
+  getLatestReviews: ({ offset = 0, limit = 20 }: { offset?: number; limit?: number }) =>
+    api.get(`/reviews/latest?offset=${offset}&limit=${limit}`).then(res => res.data),
+  getProductReviews: (productId: number, { offset = 0, limit = 10 }: { offset?: number; limit?: number } = {}) =>
+    api.get(`/reviews/product/${productId}?offset=${offset}&limit=${limit}`).then(res => res.data),
+  createReview: (payload: any) => api.post('/reviews', payload).then(res => res.data),
+  hideReview: (id: number) => api.patch(`/reviews/${id}/hide`).then(res => res.data),
+  unhideReview: (id: number) => api.patch(`/reviews/${id}/unhide`).then(res => res.data),
 };
 
 export default api;
