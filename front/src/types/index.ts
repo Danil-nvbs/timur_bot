@@ -53,6 +53,7 @@ export interface Product {
   updatedAt: string;
   category?: Category;
   subcategory?: Subcategory;
+  priceBase?: number;
 }
 
 export interface Order {

@@ -949,8 +949,12 @@ export class TelegramService implements OnModuleInit {
     let message = `🛒 ${categoryName}\n\n`;
     
     currentProducts.forEach((product, index) => {
+      const base = (product as any).priceBase || 1;
+      const unitLabel = (product as any).unit ? ` ${(product as any).unit}` : '';
       message += `${index + 1}. ${product.name}\n`;
-      message += `   💰 ${product.price} ₽\n`;
+      message += base > 1
+        ? `   💰 ${product.price} ₽ за ${base}${unitLabel}\n`
+        : `   💰 ${product.price} ₽\n`;
       if (product.description) {
         message += `   📝 ${product.description}\n`;
       }
@@ -1000,7 +1004,12 @@ export class TelegramService implements OnModuleInit {
       const messageTextLines: string[] = [];
       messageTextLines.push(`🛍 ${product.name}`);
       messageTextLines.push('');
-      messageTextLines.push(`💰 Цена: ${product.price} ₽`);
+      const priceBase = (product as any).priceBase || 1;
+      if (priceBase > 1 && product.unit) {
+        messageTextLines.push(`💰 Цена: ${product.price} ₽ за ${priceBase} ${product.unit}`);
+      } else {
+        messageTextLines.push(`💰 Цена: ${product.price} ₽`);
+      }
       if (product.unit) {
         messageTextLines.push(`📏 Единица измерения: ${product.unit}`);
       }
@@ -1011,7 +1020,7 @@ export class TelegramService implements OnModuleInit {
         messageTextLines.push(`⭐ Рейтинг: ${stats.avg} (${stats.count})`);
       }
       if (cartQuantity > 0) {
-        messageTextLines.push(`🛒 В корзине: ${cartQuantity} шт.`);
+        messageTextLines.push(`🛒 В корзине: ${cartQuantity} ${product.unit}`);
       }
       if (product.description) {
         messageTextLines.push('');
@@ -1207,12 +1216,17 @@ export class TelegramService implements OnModuleInit {
       let total = 0;
   
       cartItems.forEach((item, index) => {
-        const itemTotal = item.product.price * item.quantity;
-        total += itemTotal;
-        
+        const base = (item.product as any).priceBase || 1;
         const unitLabel = item.product.unit ? ` ${item.product.unit}` : '';
+        const unitPrice = item.product.price / base;
+        const itemTotal = Math.round(unitPrice * item.quantity * 100) / 100;
+        total += itemTotal;
         message += `${index + 1}. ${item.product.name}\n`;
-        message += `   💰 ${item.product.price} ₽ × ${item.quantity}${unitLabel} = ${itemTotal} ₽\n`;
+        if (base > 1) {
+          message += `   ${item.quantity}${unitLabel} по ${item.product.price} ₽ за ${base}${unitLabel} = ${itemTotal} ₽\n`;
+        } else {
+          message += `   ${item.quantity}${unitLabel} по ${item.product.price} ₽ = ${itemTotal} ₽\n`;
+        }
       });
   
       message += `💳 Итого: ${total} ₽`;
@@ -1286,9 +1300,16 @@ export class TelegramService implements OnModuleInit {
       message += '🛍 Ваш заказ:\n\n';
 
       tempOrder.cartItems.forEach((item, index) => {
-        const itemTotal = item.product.price * item.quantity;
+        const base = (item.product as any).priceBase || 1;
+        const unitLabel = item.product.unit ? ` ${item.product.unit}` : '';
+        const unitPrice = item.product.price / base;
+        const itemTotal = Math.round(unitPrice * item.quantity * 100) / 100;
         message += `${index + 1}. ${item.product.name}\n`;
-        message += `   💰 ${item.product.price} ₽ × ${item.quantity} = ${itemTotal} ₽\n\n`;
+        if (base > 1) {
+          message += `   ${item.quantity}${unitLabel} по ${item.product.price} ₽ за ${base}${unitLabel} = ${itemTotal} ₽\n\n`;
+        } else {
+          message += `   ${item.quantity}${unitLabel} по ${item.product.price} ₽ = ${itemTotal} ₽\n\n`;
+        }
       });
 
       message += `💳 Итого: ${tempOrder.total} ₽\n\n`;
@@ -1496,14 +1517,16 @@ export class TelegramService implements OnModuleInit {
       // Создаем позиции заказа и рассчитываем общую сумму
       let orderTotal = 0;
       for (const cartItem of cartItems) {
-        const itemTotal = cartItem.product.price * cartItem.quantity;
+        const base = (cartItem.product as any).priceBase || 1;
+        const unitPrice = cartItem.product.price / base; // нормализованная цена за 1 единицу
+        const itemTotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
         orderTotal += itemTotal;
         
         await this.ordersService.createOrderItem({
           orderId: order.id,
           productId: cartItem.productId,
           quantity: cartItem.quantity,
-          price: cartItem.product.price,
+          price: unitPrice,
         });
       }
 

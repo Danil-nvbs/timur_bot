@@ -46,6 +46,13 @@ export class Product extends Model {
   price: number;
 
   @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    defaultValue: 1,
+  })
+  priceBase: number; // база цены: цена указана за это количество единиц (например, 100 грамм)
+
+  @Column({
     type: DataType.TEXT, // base64 может быть длинным
     allowNull: true,
   })

@@ -69,6 +69,7 @@ const ProductsPage: React.FC = () => {
     name: '',
     description: '',
     price: '',
+    priceBase: '1',
     categoryId: '',
     subcategoryId: '',
     isAvailable: true,
@@ -174,6 +175,7 @@ const ProductsPage: React.FC = () => {
         name: product.name,
         description: product.description || '',
         price: product.price.toString(),
+        priceBase: ((product as any).priceBase || 1).toString(),
         categoryId: product.categoryId.toString(),
         subcategoryId: product.subcategoryId?.toString() || '',
         isAvailable: product.isAvailable,
@@ -188,6 +190,7 @@ const ProductsPage: React.FC = () => {
         name: '',
         description: '',
         price: '',
+        priceBase: '1',
         categoryId: '',
         subcategoryId: '',
         isAvailable: true,
@@ -210,6 +213,7 @@ const ProductsPage: React.FC = () => {
       const productData = {
         ...formData,
         price: parseFloat(formData.price),
+        priceBase: parseInt(formData.priceBase) || 1,
         categoryId: parseInt(formData.categoryId),
         subcategoryId: formData.subcategoryId ? parseInt(formData.subcategoryId) : undefined,
       };
@@ -621,6 +625,18 @@ const ProductsPage: React.FC = () => {
             value={formData.price}
             onChange={(e) => setFormData({ ...formData, price: e.target.value })}
             sx={{ mb: 2 }}
+          />
+          <TextField
+            margin="dense"
+            label="База цены (за сколько единиц)"
+            type="number"
+            fullWidth
+            variant="outlined"
+            value={formData.priceBase}
+            onChange={(e) => setFormData({ ...formData, priceBase: e.target.value })}
+            inputProps={{ min: 1 }}
+            sx={{ mb: 2 }}
+            helperText="Например: 1 (за 1 кг/шт), 100 (за 100 г)"
           />
           <TextField
             margin="dense"

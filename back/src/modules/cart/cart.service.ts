@@ -36,7 +36,7 @@ export class CartService {
       include: [
         { 
           model: Product,
-          attributes: ['id', 'name', 'price', 'description', 'isAvailable', 'minQuantity']
+          attributes: ['id', 'name', 'price', 'priceBase', 'description', 'isAvailable', 'minQuantity', 'unit', 'step']
         }
       ],
       order: [['createdAt', 'DESC']],
@@ -76,7 +76,9 @@ export class CartService {
   async getCartTotal(userId: number): Promise<number> {
     const cartItems = await this.getCartItems(userId);
     return cartItems.reduce((total, item) => {
-      return total + (item.product.price * item.quantity);
+      const priceBase = (item.product as any).priceBase || 1;
+      const unitPrice = item.product.price / priceBase; // цена за 1 единицу
+      return total + (unitPrice * item.quantity);
     }, 0);
   }
 }
