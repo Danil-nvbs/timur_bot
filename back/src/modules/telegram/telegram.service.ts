@@ -556,14 +556,14 @@ export class TelegramService implements OnModuleInit {
     try {
       const user = await this.usersService.findByTelegramId(ctx.from.id);
       if (!user) {
-        await ctx.editMessageText('❌ Пользователь не найден');
+        await this.safeEditMessage(ctx, '❌ Пользователь не найден');
         return;
       }
 
       const orders = await this.ordersService.getUserOrders(user.id);
 
       if (orders.length === 0) {
-        await ctx.editMessageText(
+        await this.safeEditMessage(ctx,
           '📋 Ваши заказы\n\nУ вас пока нет заказов.\nНачните покупки прямо сейчас!',
           {
             reply_markup: {
@@ -872,15 +872,13 @@ export class TelegramService implements OnModuleInit {
         if (subcategories.length > 0) {
           message += '\nТовары в категории:\n';
         }
-        // Сортируем товары по имени и группируем по 2 в ряд
+        // Сортируем товары по имени и выводим по одной кнопке в строке
         const sortedProducts = products.sort((a, b) => a.name.localeCompare(b.name));
-        for (let i = 0; i < sortedProducts.length; i += 2) {
-          const row = [];
-          row.push({ text: `🛒 ${sortedProducts[i].name}`, callback_data: `product_${sortedProducts[i].id}` });
-          if (sortedProducts[i + 1]) {
-            row.push({ text: `🛒 ${sortedProducts[i + 1].name}`, callback_data: `product_${sortedProducts[i + 1].id}` });
-          }
-          keyboard.push(row);
+        for (const p of sortedProducts) {
+          const base = (p as any).priceBase || 1;
+          const unitLabel = (p as any).unit ? ` ${(p as any).unit}` : '';
+          const priceLabel = base > 1 ? `${p.price} ₽ за ${base}${unitLabel}` : `${p.price} ₽`;
+          keyboard.push([{ text: `🛒 ${p.name} — ${priceLabel}`, callback_data: `product_${p.id}` }]);
         }
       }
       
@@ -961,12 +959,15 @@ export class TelegramService implements OnModuleInit {
       message += `   [Заказать](callback_data:product_${product.id})\n\n`;
     });
   
-    const keyboard = currentProducts.map((product, index) => [
-      { 
-        text: `🛒 ${product.name} - ${product.price} ₽`, 
-        callback_data: `product_${product.id}` 
-      }
-    ]);
+    const keyboard = currentProducts.map((product, index) => {
+      const base = (product as any).priceBase || 1;
+      const unitLabel = (product as any).unit ? ` ${(product as any).unit}` : '';
+      const priceLabel = base > 1 ? `${product.price} ₽ за ${base}${unitLabel}` : `${product.price} ₽`;
+      return [{
+        text: `🛒 ${product.name} — ${priceLabel}`,
+        callback_data: `product_${product.id}`
+      }];
+    });
   
     keyboard.push([{ text: '🔙 Назад в каталог', callback_data: 'catalog' }]);
 
@@ -1260,14 +1261,14 @@ export class TelegramService implements OnModuleInit {
       keyboard.push([{ text: '🛒 Продолжить покупки', callback_data: 'catalog' }]);
       keyboard.push([{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]);
   
-      await ctx.editMessageText(message, {
+      await this.safeEditMessage(ctx, message, {
         reply_markup: {
           inline_keyboard: keyboard,
         },
       });
     } catch (error) {
       this.logger.error('Ошибка загрузки корзины:', error);
-      await ctx.editMessageText('❌ Ошибка загрузки корзины');
+      await this.safeEditMessage(ctx, '❌ Ошибка загрузки корзины');
     }
   }
 
